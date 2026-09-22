@@ -1,0 +1,1 @@
+# Intentionally empty. Marks tests/core as a package.

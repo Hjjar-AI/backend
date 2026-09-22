@@ -1,0 +1,1 @@
+# No models to register; admin not needed for analytics.

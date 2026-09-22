@@ -1,0 +1,1 @@
+# Analytics does not define any models; it aggregates data from other apps.

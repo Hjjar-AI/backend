@@ -1,0 +1,119 @@
+{# backend/apps/questions/templates/exports/questions_pdf.html #}
+{# #}
+{# Rendered server-side by pdf_export.export_questions_pdf and handed #}
+{# to WeasyPrint as a string. Do NOT add client-side assets (JS, #}
+{# remote fonts, remote images) — WeasyPrint runs no JavaScript and #}
+{# fetches URLs synchronously. #}
+{# #}
+{# Context variables:                                                 #}
+{#   questions        — list of Question instances (already filtered  #}
+{#                      AND carrying a `.difficulty_label` attribute) #}
+{#   verified_only    — bool                                           #}
+{#   exported_at      — datetime                                       #}
+{#   filters_summary  — list of human-readable filter descriptions;   #}
+{#                      empty when no filters are active              #}
+{#   doc_title        — fully resolved header title, already including #}
+{#                      the "verified only" suffix when appropriate   #}
+{# #}
+{# INLINE STYLES                                                      #}
+{# ------------                                                       #}
+{# This template deliberately carries NO `style="..."` attributes.   #}
+{# Per-category dot colours are emitted as CSS rules by              #}
+{# `_build_category_color_css` in pdf_export.py and appended to the   #}
+{# stylesheet. #}
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ doc_title }}</title>
+</head>
+<body>
+
+  <header class="doc-header">
+    <h1>{{ doc_title }}</h1>
+    <p class="doc-meta">
+      تم التصدير في <strong>{{ exported_at|date:"Y-m-d H:i" }}</strong>
+      &nbsp;·&nbsp;
+      عدد الأسئلة: <strong>{{ questions|length }}</strong>
+    </p>
+  </header>
+
+  {% if filters_summary %}
+    <div class="filters-applied">
+      <strong>الفلاتر المطبقة:</strong>
+      {{ filters_summary|join:" · " }}
+    </div>
+  {% endif %}
+
+  {% for q in questions %}
+    <article class="question question--{{ q.difficulty }}">
+
+      <header class="q-header">
+        <span class="q-number">{{ forloop.counter }}</span>
+        <span class="q-difficulty q-difficulty--{{ q.difficulty }}">
+          {{ q.difficulty_label }}
+        </span>
+        {% if q.category %}
+          <span class="q-category">
+            <span class="q-category-dot q-category-dot--cat-{{ q.category.id }}"></span>
+            {{ q.category.name }}
+          </span>
+        {% endif %}
+      </header>
+
+      {% if q.case and q.case.stem %}
+        <div class="case-stem">
+          <span class="case-stem-label">
+            حالة سريرية{% if q.case.key %} — {{ q.case.key }}{% endif %}
+          </span>
+          {{ q.case.stem }}
+        </div>
+      {% endif %}
+
+      <div class="q-text">{{ q.question }}</div>
+
+      <ul class="q-choices">
+        {% for choice in q.choices %}
+          {% if forloop.counter == q.correct_answer %}
+            <li class="q-choice q-choice--correct">
+              <span class="choice-marker">{{ forloop.counter }}</span>
+              <span class="choice-text">{{ choice }}</span>
+              <span class="choice-check">✓</span>
+            </li>
+          {% else %}
+            <li class="q-choice">
+              <span class="choice-marker">{{ forloop.counter }}</span>
+              <span class="choice-text">{{ choice }}</span>
+            </li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+
+      {% if q.explanation %}
+        <div class="q-explanation">
+          <strong>الشرح:</strong>
+          {{ q.explanation }}
+        </div>
+      {% endif %}
+
+      {% if q.source or q.tags.all %}
+        <footer class="q-footer">
+          {% if q.source %}
+            <span class="q-meta-item">
+              <span class="q-meta-label">المصدر:</span> {{ q.source }}
+            </span>
+          {% endif %}
+          {% if q.tags.all %}
+            <span class="q-meta-item">
+              <span class="q-meta-label">الوسوم:</span>
+              {% for tag in q.tags.all %}{{ tag.name }}{% if not forloop.last %}، {% endif %}{% endfor %}
+            </span>
+          {% endif %}
+        </footer>
+      {% endif %}
+
+    </article>
+  {% endfor %}
+
+</body>
+</html>
