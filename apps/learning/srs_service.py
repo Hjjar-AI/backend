@@ -298,13 +298,41 @@ class SRSService:
         The whole thing is now ONE aggregate query with five
         conditional counts. The `_visible_attempts` subquery fires
         exactly once per call to this method.
+
+        ALIAS RENAME (fix — FieldError)
+        -------------------------------
+        The alias for the "answered correctly at least once" count
+        is `ever_correct_total`, NOT `ever_correct`. The name
+        `ever_correct` is the underlying BooleanField that the
+        aggregate's own filter tests, and Django resolves a filter
+        lookup against the query's annotation registry before the
+        model's field namespace. The aggregate alias is registered
+        into that registry during the same `.aggregate()` call, so
+        a filter of the form `Q(ever_correct=True)` was resolving
+        to the aggregate itself instead of to the field, and Django
+        raised
+
+            FieldError: Cannot compute Count('ever_correct'):
+            'ever_correct' is an aggregate
+
+        The response dict below still emits the wire key
+        `ever_correct` (the key every caller reads), so no
+        client-side change is needed. Only the intermediate alias
+        is different.
+
+        The rule this fix encodes: do NOT name an aggregate alias
+        after a field the aggregate's own filter (or the filter of
+        a sibling aggregate in the same call) references. Name it
+        after the metric it measures — `ever_correct_total`,
+        `wrong_open`, `fragile_correct`, `due_now` — and map to the
+        wire key in the return dict.
         """
         qs = SRSService._visible_attempts(user)
         now = timezone.now()
 
         stats = qs.aggregate(
             total_seen=Count('id'),
-            ever_correct=Count(
+            ever_correct_total=Count(
                 'id', filter=Q(ever_correct=True),
             ),
             wrong_open=Count(
@@ -322,7 +350,7 @@ class SRSService:
 
         return {
             'total_seen': stats['total_seen'] or 0,
-            'ever_correct': stats['ever_correct'] or 0,
+            'ever_correct': stats['ever_correct_total'] or 0,
             'wrong_open': stats['wrong_open'] or 0,
             'fragile_correct': stats['fragile_correct'] or 0,
             'due_now': stats['due_now'] or 0,

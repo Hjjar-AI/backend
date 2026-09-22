@@ -1,0 +1,124 @@
+
+# ============================================================================
+# Quiz backend — Python dependencies
+# ============================================================================
+#
+# Install:
+#     pip install -r requirements.txt
+#
+# System libraries that these wheels depend on (libpango, libcairo,
+# libmysqlclient, libmagic, etc.) are documented in DEPLOYMENT.md § 1.
+# A missing system library does not prevent pip install; it surfaces
+# at import time and is reported by `manage.py doctor`.
+#
+# Contents:
+#   § 1  Direct runtime dependencies
+#   § 2  Transitive runtime dependencies (pinned for reproducibility)
+#   § 3  Development / operations tooling (commented)
+#
+# Do not hand-edit § 2 to a version that pip did not resolve from § 1.
+# If a specific transitive pin is required, add it to § 1 with a
+# comment explaining why.
+#
+# ============================================================================
+
+
+# ============================================================================
+# § 1  DIRECT RUNTIME DEPENDENCIES
+# ============================================================================
+
+# ── Framework ───────────────────────────────────────────────────────────────
+Django==6.1.1
+djangorestframework==3.18.1
+django-cors-headers==4.9.0
+django-filter==26.1
+django-jazzmin==3.0.5
+
+# ── Database driver ─────────────────────────────────────────────────────────
+# Required by `django.db.backends.mysql` in config/settings.py.
+# Needs `default-libmysqlclient-dev build-essential pkg-config` on
+# Debian/Ubuntu at compile time. See DEPLOYMENT.md § 1.
+#
+# Compiler-free alternative: replace with `PyMySQL` and add
+#     import pymysql; pymysql.install_as_MySQLdb()
+# to config/__init__.py. Slower, but no build toolchain needed.
+mysqlclient==2.2.7
+
+# ── Data import / export ────────────────────────────────────────────────────
+# pandas + openpyxl handle .xlsx; xlrd handles legacy .xls.
+pandas==3.0.5
+openpyxl==3.1.5
+xlrd==2.0.2
+
+# ── PDF export ──────────────────────────────────────────────────────────────
+# Backs apps/questions/services/exporting/pdf_export.py.
+# Requires libpango-1.0-0, libpangoft2-1.0-0, libharfbuzz0b, libcairo2,
+# libgdk-pixbuf-2.0-0, libffi at runtime. See DEPLOYMENT.md § 1.
+# The app starts and runs without them; only `fmt=pdf` returns 500.
+weasyprint==66.0
+
+# ── Image handling ──────────────────────────────────────────────────────────
+# Question.image (FileField) and the qrcode[pil] backend both need this.
+pillow==12.3.0
+
+# ── Validation and configuration ────────────────────────────────────────────
+# python-magic backs the MIME check in
+# apps/questions/services/importing/validators.py and
+# apps/questions/serializers/image.py. Fails closed if absent — see
+# verify_upload_mime's docstring. Requires libmagic on the host.
+python-magic==0.4.27
+python-dotenv==1.2.3
+
+# ── Admin tooling ───────────────────────────────────────────────────────────
+# [pil] extra is what enables the ASCII QR output of
+# `manage.py reset_admin_password --qr`.
+qrcode[pil]==8.2
+
+# ── Production WSGI server ──────────────────────────────────────────────────
+# Not used by `manage.py runserver`. Required for any real deployment.
+gunicorn==26.2.0
+
+
+# ============================================================================
+# § 2  TRANSITIVE RUNTIME DEPENDENCIES
+# ============================================================================
+#
+# Pinned for `pip install --no-deps -r` (air-gapped installs, slim
+# container layers). Populated by pip's resolver from § 1 — do not
+# edit by hand.
+
+# From Django
+asgiref==3.12.1
+sqlparse==0.6.0
+
+# From pandas
+numpy==2.5.3
+python-dateutil==2.9.0.post0
+six==1.17.0
+
+# From openpyxl
+et_xmlfile==2.0.0
+
+# From weasyprint
+cffi==1.17.1
+cssselect2==0.8.0
+fonttools==4.60.0
+html5lib==1.1
+Pyphen==0.17.2
+tinycss2==1.4.0
+tinyhtml5==2.0.0
+webencodings==0.5.1
+
+
+# ============================================================================
+# § 3  DEV / OPERATIONS TOOLING
+# ============================================================================
+#
+# Not installed in production. Uncomment as needed.
+#
+#   pip-tools — recompiles § 1 + § 2 into a fully-locked file.
+#   pip-audit — scans installed packages against the PyPA advisory DB.
+#               Run before every release.
+
+# pip-tools>=7.4.0
+# pip-audit>=2.7.0
