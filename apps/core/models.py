@@ -92,7 +92,7 @@ class PrivilegedAction(models.Model):
         return f"{who} · {self.action} · {self.timestamp:%Y-%m-%d %H:%M:%S}"
 
 
-class Tip(models.Model):
+class Tip(TimeStampedModel):
 
     text = models.TextField(max_length=500)
     locale = models.CharField(
@@ -104,9 +104,6 @@ class Tip(models.Model):
     )
     is_active = models.BooleanField(default=True)
     order = models.IntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
     class Meta:
 
         ordering = ['order', 'id']

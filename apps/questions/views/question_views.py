@@ -379,7 +379,7 @@ class QuestionBatchView(APIView):
             questions, many=True,
             context={'request': request, 'case_sibling_cache': cache},
         )
-        return api_success(data={'items': out.data, 'count': len(out.data)})
+        return api_success(data={'items': out.data, 'total': len(out.data)})
 
 
 class ToggleVerifyView(APIView):

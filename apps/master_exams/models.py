@@ -6,10 +6,11 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from apps.core.models import TimeStampedModel
 from apps.users.models import User
 
 
-class MasterExam(models.Model):
+class MasterExam(TimeStampedModel):
     STORED_STATUS_CHOICES = [
         ('draft', 'Draft'),
         ('published', 'Published'),
@@ -112,9 +113,6 @@ class MasterExam(models.Model):
     published_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     published_to_bank_at = models.DateTimeField(null=True, blank=True)
-
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-opens_at', '-created_at']
@@ -230,7 +228,7 @@ class MasterExamQuestion(models.Model):
         return f'{self.master_exam_id} · Q{self.question_id} @ {self.order}'
 
 
-class MasterExamAttempt(models.Model):
+class MasterExamAttempt(TimeStampedModel):
     master_exam = models.ForeignKey(
         MasterExam,
         on_delete=models.CASCADE,
@@ -264,9 +262,6 @@ class MasterExamAttempt(models.Model):
     is_makeup = models.BooleanField(default=False)
     forced_finish = models.BooleanField(default=False)
     exam_name_snapshot = models.CharField(max_length=200)
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
-
     class Meta:
         ordering = ['-started_at']
         unique_together = ('master_exam', 'user', 'is_makeup')

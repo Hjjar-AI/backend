@@ -4,10 +4,11 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.utils import timezone
 
+from apps.core.models import TimeStampedModel
 from apps.users.models import User
 
 
-class StudyPlanner(models.Model):
+class StudyPlanner(TimeStampedModel):
     """
     A per-user study target.
 
@@ -49,9 +50,6 @@ class StudyPlanner(models.Model):
     )
     start_date = models.DateField(default=timezone.localdate)
     end_date = models.DateField(null=True, blank=True)
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
-
     def __str__(self):
         return f"Planner: {self.user.username}"
 

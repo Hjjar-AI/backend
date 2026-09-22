@@ -3,16 +3,15 @@
 from django.db import models
 from django.utils import timezone
 
+from apps.core.models import TimeStampedModel
 from apps.users.models import User
 
-class Group(models.Model):
+
+class Group(TimeStampedModel):
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True, null=True)
 
     created_by = models.CharField(max_length=80, blank=True, null=True)
-
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
 
     is_active = models.BooleanField(default=True)
 

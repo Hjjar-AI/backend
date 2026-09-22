@@ -2,6 +2,7 @@
 from django.db import models
 from django.utils import timezone
 
+from apps.core.models import TimeStampedModel
 from apps.users.models import User
 
 
@@ -147,7 +148,7 @@ class TestHistory(models.Model):
         return f"{self.user.username if self.user else 'Deleted'} - {self.mode} - {self.completed_at}"
 
 
-class Blueprint(models.Model):
+class Blueprint(TimeStampedModel):
     """
     A per-category question-distribution template for exam assembly.
 
@@ -168,9 +169,6 @@ class Blueprint(models.Model):
     description = models.TextField(blank=True, null=True)
     is_active = models.BooleanField(default=True)
     created_by = models.CharField(max_length=80, blank=True, null=True)
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
-
     class Meta:
         ordering = ['name']
 

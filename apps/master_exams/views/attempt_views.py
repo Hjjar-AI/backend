@@ -221,7 +221,6 @@ class MasterExamSubmitAnswerView(APIView):
             return api_error(msg, status, details=details)
 
         return api_success(data={
-            'success': True,
             'current_question_id': attempt.current_question_id,
         })
 

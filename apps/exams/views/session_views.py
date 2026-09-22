@@ -257,8 +257,8 @@ class SubmitAnswerView(APIView):
     alongside the session — see `AnswerSubmission` — and this view
     reads it from there.
 
-    Response shape is unchanged: `{success, new_index, explanation,
-    is_correct}`. When the submission was not an answer (action was
+    Response data contains `{new_index, explanation, is_correct}`.
+    When the submission was not an answer (action was
     `previous` / `goto`, or the answer was `None`), `explanation`
     and `is_correct` are both `None`, matching the previous
     behaviour for the same inputs.
@@ -314,7 +314,6 @@ class SubmitAnswerView(APIView):
             )
 
         return api_success(data={
-            'success': True,
             'new_index': session.current_index,
             'explanation': explanation,
             'is_correct': is_correct,
