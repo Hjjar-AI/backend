@@ -117,6 +117,14 @@ def _extract_export_title(request):
     return cleaned[:150]
 
 
+def _extract_export_theme(request):
+    """Read the client-local theme used by PDF export."""
+    raw = request.query_params.get('theme')
+    if not raw:
+        return None
+    return str(raw).strip().lower()[:32] or None
+
+
 class DatabaseInfoView(APIView):
     permission_classes = [HasCapability]
     required_capability = 'admin.database'
@@ -272,6 +280,9 @@ class ExportDatabaseView(APIView):
                                    header and the filename's
                                    descriptive segment
 
+        theme=<name>               active client theme; validated by the
+                                   PDF renderer, defaults to Stone
+
     When no params are supplied, the response is byte-identical to the
     pre-filter export.
     """
@@ -281,11 +292,13 @@ class ExportDatabaseView(APIView):
     def get(self, request, fmt):
         filters = _extract_export_filters(request)
         title = _extract_export_title(request)
+        theme = _extract_export_theme(request)
         result = ExportService.export_questions(
             fmt=fmt,
             verified_only=False,
             filters=filters,
             title=title,
+            theme=theme,
         )
         return _export_response(result)
 
@@ -302,11 +315,13 @@ class ExportVerifiedDatabaseView(APIView):
     def get(self, request, fmt):
         filters = _extract_export_filters(request)
         title = _extract_export_title(request)
+        theme = _extract_export_theme(request)
         result = ExportService.export_questions(
             fmt=fmt,
             verified_only=True,
             filters=filters,
             title=title,
+            theme=theme,
         )
         return _export_response(result)
 

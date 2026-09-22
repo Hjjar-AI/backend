@@ -195,7 +195,9 @@ def _row_for_json(q):
 
 # ── Public entry point ─────────────────────────────────────────────
 
-def export_questions(fmt='excel', verified_only=False, filters=None, title=None):
+def export_questions(
+    fmt='excel', verified_only=False, filters=None, title=None, theme=None,
+):
     """
     Export the filtered question bank as XLSX, CSV, JSON, or PDF.
 
@@ -203,6 +205,10 @@ def export_questions(fmt='excel', verified_only=False, filters=None, title=None)
     and JSON ignore it — see the module docstring for why. When
     `fmt='pdf'` and `title` is provided, it becomes the header banner
     text and the descriptive segment of the generated filename.
+
+    `theme` is also PDF-only. It names the browser's active palette;
+    the PDF renderer validates it and falls back to Stone when absent
+    or unknown.
 
     Returns {'filepath', 'filename'} on success, or
     {'error', 'code'} on failure (no data after filtering, unknown
@@ -227,6 +233,7 @@ def export_questions(fmt='excel', verified_only=False, filters=None, title=None)
             verified_only=verified_only,
             filters=filters,
             title=title,
+            theme=theme,
         )
 
     export_dir = Path(settings.EXPORT_FOLDER)

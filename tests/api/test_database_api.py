@@ -17,6 +17,7 @@ wrapped in a 200 response. `test_service_error_returns_500` below
 is the guard against re-introducing that.
 """
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -267,6 +268,20 @@ class ExportDatabaseViewTests(CacheClearingTestCase):
     def test_unknown_format_returns_400(self):
         resp = self.client.get('/api/v1/database/export/nonsense/')
         self.assertEqual(resp.status_code, 400)
+
+    @patch('apps.database.views.ExportService.export_questions')
+    def test_pdf_theme_query_param_is_forwarded(self, export_questions):
+        filepath = Path(self.tmpdir) / 'themed.pdf'
+        filepath.write_bytes(b'%PDF-test')
+        export_questions.return_value = {
+            'filepath': str(filepath),
+            'filename': 'themed.pdf',
+        }
+
+        resp = self.client.get('/api/v1/database/export/pdf/?theme=dark')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(export_questions.call_args.kwargs['theme'], 'dark')
+        b''.join(resp.streaming_content)
 
     def test_state_export_returns_json(self):
         resp = self.client.get('/api/v1/database/export/state/')

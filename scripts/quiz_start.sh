@@ -2,7 +2,7 @@
 # Quiz launcher: gunicorn behind a user-owned nginx with TLS.
 # Ctrl-C (or closing the terminal) stops both.
 #
-# Location assumed: <project>/backend/scripts/quiz-start.sh
+# Location assumed: <project>/backend/scripts/quiz_start.sh
 # PROJECT_DIR is derived from the script's own path, so the project can
 # be moved anywhere and the launcher keeps working.
 
@@ -23,7 +23,7 @@ NGINX_CONF="$CONFIG_DIR/nginx.conf"
 CERT_PEM="$BACKEND_DIR/cert/quiz/quiz.pem"
 CERT_KEY="$BACKEND_DIR/cert/quiz/quiz.key"
 
-HTTPS_PORT=5443
+HTTPS_PORT=5004
 GUNICORN_WORKERS=3
 GUNICORN_SOCK="$RUNTIME_DIR/quiz.sock"
 
@@ -31,15 +31,23 @@ GUNICORN_SOCK="$RUNTIME_DIR/quiz.sock"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 # ── Virtualenv discovery ──────────────────────────────────────────
-# Priority: $QUIZ_VENV override > project-local ./venv > ~/Environments/quizenv
+# Priority: $QUIZ_VENV override > backend-local environments > project-local
+# environments > ~/Environments/quizenv. DEPLOYMENT.md creates backend/.venv,
+# so keep that location first among the automatic candidates.
 if [ -n "${QUIZ_VENV:-}" ] && [ -x "$QUIZ_VENV/bin/python" ]; then
     VENV="$QUIZ_VENV"
+elif [ -x "$BACKEND_DIR/.venv/bin/python" ]; then
+    VENV="$BACKEND_DIR/.venv"
+elif [ -x "$BACKEND_DIR/venv/bin/python" ]; then
+    VENV="$BACKEND_DIR/venv"
+elif [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
+    VENV="$PROJECT_DIR/.venv"
 elif [ -x "$PROJECT_DIR/venv/bin/python" ]; then
     VENV="$PROJECT_DIR/venv"
 elif [ -x "$HOME/Environments/quizenv/bin/python" ]; then
     VENV="$HOME/Environments/quizenv"
 else
-    fail "no venv found (checked \$QUIZ_VENV, $PROJECT_DIR/venv, ~/Environments/quizenv)"
+    fail "no venv found (checked \$QUIZ_VENV, backend/.venv, backend/venv, project/.venv, project/venv, and ~/Environments/quizenv)"
 fi
 
 # ── Sanity checks ─────────────────────────────────────────────────
@@ -49,7 +57,28 @@ fi
 [ -f "$CERT_PEM" ]                       || fail "cert missing: $CERT_PEM"
 [ -f "$CERT_KEY" ]                       || fail "key missing:  $CERT_KEY"
 [ -f "$FRONTEND_DIR/dist/index.html" ]   || fail "frontend not built (cd frontend && pnpm build)"
-[ -d "$BACKEND_DIR/staticfiles/admin" ]  || fail "staticfiles not collected (python manage.py collectstatic)"
+
+# QUIZ_NGINX is useful when the system package was compiled for a newer CPU
+# than the host. It must point to a complete, executable nginx binary.
+if [ -n "${QUIZ_NGINX:-}" ]; then
+    NGINX_BIN="$QUIZ_NGINX"
+else
+    NGINX_BIN="$(command -v nginx || true)"
+fi
+[ -n "$NGINX_BIN" ] && [ -x "$NGINX_BIN" ] || \
+    fail "nginx not found (install nginx or set QUIZ_NGINX=/path/to/nginx)"
+
+if ! NGINX_VERSION="$("$NGINX_BIN" -v 2>&1)"; then
+    fail "nginx cannot run: $NGINX_VERSION
+Install a build compatible with this CPU, or set QUIZ_NGINX=/path/to/nginx."
+fi
+
+# staticfiles/ is generated output. Create it on first launch rather than
+# requiring a separate, easy-to-miss manual step.
+if [ ! -d "$BACKEND_DIR/staticfiles/admin" ]; then
+    echo "→ collecting Django static files"
+    "$VENV/bin/python" "$BACKEND_DIR/manage.py" collectstatic --noinput
+fi
 
 mkdir -p "$RUNTIME_DIR"
 rm -f "$GUNICORN_SOCK"
@@ -134,7 +163,11 @@ http {
         location / {
             proxy_pass http://quiz_backend;
             proxy_http_version 1.1;
-            proxy_set_header Host              \$host;
+            # Preserve the incoming port. Django compares the request's
+            # Origin against request.get_host() for unsafe methods; nginx's
+            # \$host drops non-default ports and made same-origin requests to
+            # https://127.0.0.1:5004 look cross-origin to CSRF middleware.
+            proxy_set_header Host              \$http_host;
             proxy_set_header X-Real-IP         \$remote_addr;
             proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto \$scheme;
@@ -146,16 +179,20 @@ http {
 EOF
 
 # Validate the config before starting anything.
-if ! nginx -t -c "$NGINX_CONF" -p "$RUNTIME_DIR" >/dev/null 2>&1; then
+if ! "$NGINX_BIN" -t -c "$NGINX_CONF" -p "$RUNTIME_DIR" >/dev/null 2>&1; then
     echo "nginx config is invalid:"
-    nginx -t -c "$NGINX_CONF" -p "$RUNTIME_DIR" || true
+    "$NGINX_BIN" -t -c "$NGINX_CONF" -p "$RUNTIME_DIR" || true
     exit 1
 fi
 
 # ── Cleanup on exit ───────────────────────────────────────────────
 NGINX_PID=""
 GUNICORN_PID=""
+CLEANED_UP=0
 cleanup() {
+    [ "$CLEANED_UP" -eq 0 ] || return
+    CLEANED_UP=1
+    trap - EXIT INT TERM
     echo
     echo "Shutting down…"
     [ -n "$NGINX_PID" ]    && kill "$NGINX_PID"    2>/dev/null || true
@@ -164,7 +201,9 @@ cleanup() {
     rm -f "$GUNICORN_SOCK"
     echo "Stopped."
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # ── Start gunicorn ────────────────────────────────────────────────
 cd "$BACKEND_DIR"
@@ -193,7 +232,7 @@ kill -0 "$GUNICORN_PID" 2>/dev/null || fail "gunicorn exited during startup"
 
 # ── Start nginx ───────────────────────────────────────────────────
 echo "→ nginx TLS on 0.0.0.0:$HTTPS_PORT"
-nginx -c "$NGINX_CONF" -p "$RUNTIME_DIR" &
+"$NGINX_BIN" -c "$NGINX_CONF" -p "$RUNTIME_DIR" &
 NGINX_PID=$!
 
 sleep 0.5

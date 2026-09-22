@@ -105,6 +105,87 @@ _DEFAULT_TITLE = 'بنك الأسئلة'
 # Fallback when a Category row has an empty `color` field.
 _DEFAULT_CATEGORY_COLOR = '#c47d3a'
 
+# The browser keeps its theme choice in localStorage, so it is not available
+# to Django implicitly. ExportButtons sends the active theme as a query
+# parameter and this registry supplies the print renderer with the matching
+# core tokens from frontend/src/assets/tokens.css.
+_DEFAULT_PDF_THEME = 'stone'
+_PDF_THEME_ALIASES = {'light': _DEFAULT_PDF_THEME}
+_PDF_THEME_TOKENS = {
+    'stone': {
+        'primary': '#7a3f20', 'success': '#2b6547',
+        'danger': '#913a32', 'warning': '#755200', 'info': '#285e78',
+        'bg_body': '#c4b29f', 'bg_card': '#d9cab9', 'bg_alt': '#cbbbaa',
+        'text_primary': '#2d211a', 'text_secondary': '#50382d',
+        'text_muted': '#574035', 'on_accent': '#eee3d6',
+        'strong_weight': 0.70,
+    },
+    'dark': {
+        'primary': '#e6a15b', 'success': '#68b68b',
+        'danger': '#df7769', 'warning': '#e6cf45', 'info': '#64afd2',
+        'bg_body': '#0d1218', 'bg_card': '#18212a', 'bg_alt': '#222d38',
+        'text_primary': '#e2ddd5', 'text_secondary': '#c9c1b6',
+        'text_muted': '#a9a196', 'on_accent': '#26180c',
+        'strong_weight': 0.92,
+    },
+    'onyx': {
+        'primary': '#e6a15b', 'success': '#68b68b',
+        'danger': '#df7769', 'warning': '#e6cf45', 'info': '#64afd2',
+        'bg_body': '#000000', 'bg_card': '#0a0a0a', 'bg_alt': '#151515',
+        'text_primary': '#e2ddd5', 'text_secondary': '#c9c1b6',
+        'text_muted': '#a9a196', 'on_accent': '#26180c',
+        'strong_weight': 0.92,
+    },
+    'blossom': {
+        'primary': '#9b285c', 'success': '#24614f',
+        'danger': '#a82746', 'warning': '#775000', 'info': '#315f92',
+        'bg_body': '#d2a8bb', 'bg_card': '#e2b9cb', 'bg_alt': '#d6a6bb',
+        'text_primary': '#351622', 'text_secondary': '#5d293d',
+        'text_muted': '#66364a', 'on_accent': '#f1e2e9',
+        'strong_weight': 0.70,
+    },
+    'fresh': {
+        'primary': '#176b42', 'success': '#1f754c',
+        'danger': '#9b3f37', 'warning': '#745600', 'info': '#17657c',
+        'bg_body': '#aed0b6', 'bg_card': '#c4ddc8', 'bg_alt': '#b2d1b8',
+        'text_primary': '#12291c', 'text_secondary': '#294c37',
+        'text_muted': '#355840', 'on_accent': '#e4f0e6',
+        'strong_weight': 0.70,
+    },
+    'contrast': {
+        'primary': '#1d3a8f', 'success': '#104d28',
+        'danger': '#8f0f1b', 'warning': '#5d3b00', 'info': '#064e62',
+        'bg_body': '#d6d6d6', 'bg_card': '#e6e6e6', 'bg_alt': '#dedede',
+        'text_primary': '#0a0a0a', 'text_secondary': '#262626',
+        'text_muted': '#4d4d4d', 'on_accent': '#e6e6e6',
+        'strong_weight': 0.70,
+    },
+    'ink': {
+        'primary': '#252525', 'success': '#236b43',
+        'danger': '#a33128', 'warning': '#805500', 'info': '#2a5f7e',
+        'bg_body': '#d0d0cc', 'bg_card': '#deded9', 'bg_alt': '#d2d2cd',
+        'text_primary': '#171719', 'text_secondary': '#3a3a3d',
+        'text_muted': '#545459', 'on_accent': '#e8e8e4',
+        'strong_weight': 0.70,
+    },
+    'slate': {
+        'primary': '#285f8d', 'success': '#27654c',
+        'danger': '#94433d', 'warning': '#735700', 'info': '#684d97',
+        'bg_body': '#aebfd1', 'bg_card': '#c6d3e0', 'bg_alt': '#b4c4d4',
+        'text_primary': '#14283a', 'text_secondary': '#304d66',
+        'text_muted': '#354f66', 'on_accent': '#e5edf4',
+        'strong_weight': 0.70,
+    },
+    'sepia': {
+        'primary': '#8a4318', 'success': '#416b2b',
+        'danger': '#9b3324', 'warning': '#705100', 'info': '#2e627e',
+        'bg_body': '#d8be86', 'bg_card': '#e8d09a', 'bg_alt': '#ddbf83',
+        'text_primary': '#35220c', 'text_secondary': '#60451f',
+        'text_muted': '#674a24', 'on_accent': '#f0e2c6',
+        'strong_weight': 0.70,
+    },
+}
+
 # Maximum title length. A longer title is truncated (with an ellipsis)
 # rather than rejected. The same cap is applied at the view layer so
 # the value the admin sees in the input field matches what will
@@ -115,6 +196,46 @@ _MAX_TITLE_LENGTH = 150
 # descriptive segment of the generated filename. Null and C0 control
 # characters are also stripped.
 _FILENAME_HOSTILE_RE = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
+
+
+def _normalize_pdf_theme(raw):
+    """Return a supported canonical theme name, defaulting safely."""
+    value = str(raw or '').strip().lower()
+    value = _PDF_THEME_ALIASES.get(value, value)
+    return value if value in _PDF_THEME_TOKENS else _DEFAULT_PDF_THEME
+
+
+def _mix_hex(foreground, background, weight):
+    """Mix two six-digit hex colours; ``weight`` is the foreground share."""
+    foreground = foreground.lstrip('#')
+    background = background.lstrip('#')
+    channels = []
+    for index in (0, 2, 4):
+        fg = int(foreground[index:index + 2], 16)
+        bg = int(background[index:index + 2], 16)
+        channels.append(round(fg * weight + bg * (1 - weight)))
+    return '#' + ''.join(f'{channel:02x}' for channel in channels)
+
+
+def _build_pdf_palette(theme):
+    """Build document colours from the selected frontend theme tokens."""
+    name = _normalize_pdf_theme(theme)
+    palette = dict(_PDF_THEME_TOKENS[name])
+    surface = palette['bg_card']
+    palette.update({
+        'name': name,
+        'primary_dark': _mix_hex(
+            palette['primary'], '#000000', palette['strong_weight'],
+        ),
+        'border': _mix_hex(palette['text_muted'], surface, 0.30),
+        'soft_primary': _mix_hex(palette['primary'], surface, 0.14),
+        'soft_success': _mix_hex(palette['success'], surface, 0.18),
+        'soft_warning': _mix_hex(palette['warning'], surface, 0.18),
+        'soft_danger': _mix_hex(palette['danger'], surface, 0.18),
+        'soft_info': _mix_hex(palette['info'], surface, 0.14),
+        'header_meta': _mix_hex(palette['on_accent'], palette['primary'], 0.78),
+    })
+    return palette
 
 
 def _safe_color(raw):
@@ -299,6 +420,7 @@ def export_questions_pdf(
     verified_only=False,
     filters=None,
     title=None,
+    theme=None,
 ):
     """
     Render the given question list as a PDF.
@@ -309,6 +431,9 @@ def export_questions_pdf(
     `title` is optional. When supplied, it replaces the default header
     banner text and becomes the descriptive segment of the generated
     filename. When omitted, the default title is used.
+
+    `theme` is the browser's active visual theme. Unknown values fall
+    back to Stone rather than being interpolated into HTML or CSS.
     """
     try:
         from weasyprint import HTML, CSS
@@ -342,6 +467,7 @@ def export_questions_pdf(
     filters_summary = _build_filters_summary(filters)
     category_color_css = _build_category_color_css(questions)
     doc_title = _resolve_doc_title(title, verified_only)
+    palette = _build_pdf_palette(theme)
 
     html_string = render_to_string(
         'exports/questions_pdf.html',
@@ -351,6 +477,7 @@ def export_questions_pdf(
             'exported_at': timezone.now(),
             'filters_summary': filters_summary,
             'doc_title': doc_title,
+            'pdf_theme': palette['name'],
         },
     )
 
@@ -370,8 +497,8 @@ def export_questions_pdf(
     #
     # This is an f-string. Every literal CSS brace is doubled
     # (`{{` / `}}`). The only single-brace tokens below are the
-    # interpolation slots: `{font_face_css}`, `{_DEFAULT_CATEGORY_COLOR}`
-    # and `{category_color_css}`.
+    # interpolation slots are the font, selected palette, fallback category
+    # colour, and generated per-category rules.
     #
     # DO NOT paste `{% ... %}` (Django template syntax) anywhere
     # inside this f-string, including inside CSS comments — Python
@@ -383,18 +510,18 @@ def export_questions_pdf(
         @page {{
             size: A4;
             margin: 1.4cm 1.2cm 1.6cm 1.2cm;
-            background: #f5ede0;
+            background: {palette['bg_body']};
 
             @bottom-center {{
                 content: counter(page) ' / ' counter(pages);
                 font-size: 9pt;
-                color: #8b7355;
+                color: {palette['text_muted']};
                 font-family: 'Noto Arabic', sans-serif;
             }}
             @bottom-right {{
                 content: 'مُختبِر';
                 font-size: 8pt;
-                color: #a08c70;
+                color: {palette['text_muted']};
                 font-family: 'Noto Arabic', sans-serif;
             }}
         }}
@@ -405,8 +532,8 @@ def export_questions_pdf(
             text-align: right;
             font-size: 10.5pt;
             line-height: 1.7;
-            color: #3b2a1f;
-            background: #f5ede0;
+            color: {palette['text_primary']};
+            background: {palette['bg_body']};
             margin: 0;
             padding: 0;
         }}
@@ -415,8 +542,8 @@ def export_questions_pdf(
         .doc-header {{
             margin: 0 0 1em 0;
             padding: 0.85em 1em;
-            background: linear-gradient(135deg, #c47d3a 0%, #a86a2e 100%);
-            color: #fdf6ea;
+            background: linear-gradient(135deg, {palette['primary']} 0%, {palette['primary_dark']} 100%);
+            color: {palette['on_accent']};
             border-radius: 6px;
         }}
 
@@ -424,7 +551,7 @@ def export_questions_pdf(
             font-size: 18pt;
             margin: 0 0 0.15em 0;
             font-weight: 700;
-            color: #fdf6ea;
+            color: {palette['on_accent']};
             letter-spacing: -0.01em;
             line-height: 1.35;
         }}
@@ -432,20 +559,20 @@ def export_questions_pdf(
         .doc-meta {{
             margin: 0;
             font-size: 9pt;
-            color: #f0dcc2;
+            color: {palette['header_meta']};
         }}
 
         .doc-meta strong {{
-            color: #fdf6ea;
+            color: {palette['on_accent']};
             font-weight: 600;
         }}
 
         /* ── Filters summary strip ───────────────────────────── */
         .filters-applied {{
             font-size: 9pt;
-            color: #5a4a38;
-            background: #e8dcc4;
-            border-inline-start: 4px solid #c47d3a;
+            color: {palette['text_secondary']};
+            background: {palette['bg_alt']};
+            border-inline-start: 4px solid {palette['primary']};
             padding: 0.5em 0.8em;
             border-radius: 4px;
             margin: 0 0 1.2em 0;
@@ -453,24 +580,24 @@ def export_questions_pdf(
         }}
 
         .filters-applied strong {{
-            color: #8a5420;
+            color: {palette['primary']};
             font-weight: 700;
         }}
 
         /* ── Question card ───────────────────────────────────── */
         .question {{
             page-break-inside: avoid;
-            background: #eae0d0;
-            border: 1px solid #d4c4a8;
-            border-inline-start: 4px solid #c9b89c;
+            background: {palette['bg_card']};
+            border: 1px solid {palette['border']};
+            border-inline-start: 4px solid {palette['border']};
             border-radius: 6px;
             padding: 0.85em 0.95em 0.75em 0.95em;
             margin-bottom: 0.85em;
         }}
 
-        .question--easy   {{ border-inline-start-color: #558b6f; }}
-        .question--medium {{ border-inline-start-color: #d49a1f; }}
-        .question--hard   {{ border-inline-start-color: #b55a4a; }}
+        .question--easy   {{ border-inline-start-color: {palette['success']}; }}
+        .question--medium {{ border-inline-start-color: {palette['warning']}; }}
+        .question--hard   {{ border-inline-start-color: {palette['danger']}; }}
 
         /* ── Question header row ─────────────────────────────── */
         .q-header {{
@@ -484,8 +611,8 @@ def export_questions_pdf(
             min-width: 1.7em;
             text-align: center;
             padding: 0 7px;
-            background: #3b2a1f;
-            color: #f5ede0;
+            background: {palette['text_primary']};
+            color: {palette['bg_card']};
             border-radius: 4px;
             font-size: 9pt;
             font-weight: 700;
@@ -504,23 +631,23 @@ def export_questions_pdf(
         }}
 
         .q-difficulty--easy {{
-            background: #dbe7de;
-            color: #3d6b52;
+            background: {palette['soft_success']};
+            color: {palette['success']};
         }}
         .q-difficulty--medium {{
-            background: #f1e2c0;
-            color: #8a6410;
+            background: {palette['soft_warning']};
+            color: {palette['warning']};
         }}
         .q-difficulty--hard {{
-            background: #eed6d0;
-            color: #8a3f34;
+            background: {palette['soft_danger']};
+            color: {palette['danger']};
         }}
 
         .q-category {{
             display: inline-flex;
             align-items: center;
             font-size: 9pt;
-            color: #8b7355;
+            color: {palette['text_muted']};
             margin-inline-start: auto;
         }}
 
@@ -536,7 +663,7 @@ def export_questions_pdf(
             height: 8px;
             border-radius: 50%;
             margin-inline-end: 5px;
-            border: 1px solid rgba(59, 42, 31, 0.15);
+            border: 1px solid {palette['border']};
             background-color: {_DEFAULT_CATEGORY_COLOR};
         }}
 
@@ -550,27 +677,27 @@ def export_questions_pdf(
         .q-text {{
             font-weight: 600;
             font-size: 11pt;
-            color: #3b2a1f;
+            color: {palette['text_primary']};
             line-height: 1.65;
             margin: 0 0 0.7em 0;
         }}
 
         /* ── Case stem panel ─────────────────────────────────── */
         .case-stem {{
-            background: #e1e8ed;
-            border-inline-start: 3px solid #2e8ac0;
+            background: {palette['soft_info']};
+            border-inline-start: 3px solid {palette['info']};
             padding: 0.55em 0.8em;
             margin: 0 0 0.65em 0;
             border-radius: 4px;
             font-size: 9.5pt;
-            color: #3a4d5c;
+            color: {palette['text_secondary']};
             line-height: 1.65;
         }}
 
         .case-stem-label {{
             display: block;
             font-weight: 700;
-            color: #2e8ac0;
+            color: {palette['info']};
             font-size: 8.5pt;
             margin-bottom: 0.2em;
             letter-spacing: 0.02em;
@@ -589,10 +716,10 @@ def export_questions_pdf(
             padding: 0.35em 0.65em;
             margin-bottom: 4px;
             border-radius: 4px;
-            background: #f2ebdd;
-            border: 1px solid #d9cbb2;
+            background: {palette['bg_alt']};
+            border: 1px solid {palette['border']};
             font-size: 10pt;
-            color: #3b2a1f;
+            color: {palette['text_primary']};
             line-height: 1.55;
         }}
 
@@ -601,8 +728,8 @@ def export_questions_pdf(
         }}
 
         .q-choice--correct {{
-            background: #dce8dd;
-            border-color: #558b6f;
+            background: {palette['soft_success']};
+            border-color: {palette['success']};
         }}
 
         .choice-marker {{
@@ -611,8 +738,8 @@ def export_questions_pdf(
             height: 20px;
             text-align: center;
             border-radius: 50%;
-            background: #3b2a1f;
-            color: #f5ede0;
+            background: {palette['text_primary']};
+            color: {palette['bg_card']};
             font-size: 8.5pt;
             font-weight: 700;
             line-height: 20px;
@@ -622,8 +749,8 @@ def export_questions_pdf(
         }}
 
         .q-choice--correct .choice-marker {{
-            background: #558b6f;
-            color: #f0f8f1;
+            background: {palette['success']};
+            color: {palette['on_accent']};
         }}
 
         .choice-text {{
@@ -632,7 +759,7 @@ def export_questions_pdf(
         }}
 
         .choice-check {{
-            color: #558b6f;
+            color: {palette['success']};
             font-weight: 700;
             font-size: 11pt;
             flex-shrink: 0;
@@ -643,16 +770,16 @@ def export_questions_pdf(
         .q-explanation {{
             margin: 0.6em 0 0 0;
             padding: 0.6em 0.85em;
-            background: #efe6d6;
-            border-inline-start: 3px solid #c47d3a;
+            background: {palette['soft_primary']};
+            border-inline-start: 3px solid {palette['primary']};
             border-radius: 4px;
             font-size: 9.5pt;
-            color: #4a3a2c;
+            color: {palette['text_secondary']};
             line-height: 1.65;
         }}
 
         .q-explanation strong {{
-            color: #8a5420;
+            color: {palette['primary']};
             font-weight: 700;
         }}
 
@@ -660,9 +787,9 @@ def export_questions_pdf(
         .q-footer {{
             margin-top: 0.6em;
             padding-top: 0.4em;
-            border-top: 1px dashed #c9b89c;
+            border-top: 1px dashed {palette['border']};
             font-size: 8.5pt;
-            color: #8b7355;
+            color: {palette['text_muted']};
             line-height: 1.6;
         }}
 
@@ -672,7 +799,7 @@ def export_questions_pdf(
         }}
 
         .q-meta-label {{
-            color: #5a4a38;
+            color: {palette['text_secondary']};
             font-weight: 600;
         }}
     """)

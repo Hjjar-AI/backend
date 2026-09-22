@@ -46,7 +46,9 @@ class ExportService:
     """
 
     @staticmethod
-    def export_questions(fmt='excel', verified_only=False, filters=None, title=None):
+    def export_questions(
+        fmt='excel', verified_only=False, filters=None, title=None, theme=None,
+    ):
         """
         Flat export of the question bank.
 
@@ -60,6 +62,7 @@ class ExportService:
             verified_only=verified_only,
             filters=filters,
             title=title,
+            theme=theme,
         )
 
     @staticmethod

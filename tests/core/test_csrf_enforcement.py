@@ -78,6 +78,28 @@ class CSRFEnforcementTests(CacheClearingTestCase):
         self.assertEqual(resp.status_code, 201, resp.content)
         self.assertEqual(Question.objects.count(), 1)
 
+    def test_https_origin_with_nondefault_port_succeeds(self):
+        """The reverse proxy must preserve the port in the Host header."""
+        csrf_resp = self.client.get(
+            '/api/v1/auth/csrf/',
+            HTTP_HOST='127.0.0.1:5004',
+            HTTP_X_FORWARDED_PROTO='https',
+        )
+        token = csrf_resp.json()['data']['token']
+
+        resp = self.client.post(
+            '/api/v1/questions/',
+            self._question_payload(),
+            format='json',
+            HTTP_HOST='127.0.0.1:5004',
+            HTTP_ORIGIN='https://127.0.0.1:5004',
+            HTTP_X_FORWARDED_PROTO='https',
+            HTTP_X_CSRFTOKEN=token,
+        )
+
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(Question.objects.count(), 1)
+
     def test_login_endpoint_is_csrf_exempt(self):
         """
         Login runs before the user has a session, so DRF's session

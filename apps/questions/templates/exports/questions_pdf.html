@@ -14,6 +14,7 @@
 {#                      empty when no filters are active              #}
 {#   doc_title        — fully resolved header title, already including #}
 {#                      the "verified only" suffix when appropriate   #}
+{#   pdf_theme        — validated canonical theme name                 #}
 {# #}
 {# INLINE STYLES                                                      #}
 {# ------------                                                       #}
@@ -22,7 +23,7 @@
 {# `_build_category_color_css` in pdf_export.py and appended to the   #}
 {# stylesheet. #}
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="ar" dir="rtl" data-theme="{{ pdf_theme }}">
 <head>
   <meta charset="utf-8">
   <title>{{ doc_title }}</title>
