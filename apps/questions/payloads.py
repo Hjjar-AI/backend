@@ -107,7 +107,7 @@ def build_grading_snapshot(question_ids):
         { str(question_id): {
               'correct_answer', 'difficulty',
               'category_id', 'category_name', 'category_color',
-              'question', 'choices', 'explanation',
+              'question', 'choices', 'explanation', 'translations',
               'image_name',
               'case': {'id', 'key', 'title', 'stem'} | None,
         }, ... }
@@ -125,6 +125,7 @@ def build_grading_snapshot(question_ids):
             'question': question.question,
             'choices': question.choices,
             'explanation': question.explanation,
+            'translations': question.translations or {},
             'image_name': question.image.name if question.image else None,
             'case': case_block_from_live(question.case) if question.case_id else None,
         }
@@ -162,6 +163,7 @@ def exam_question_payload(question):
         'id': question.id,
         'text': question.question,
         'choices': question.choices,
+        'translations': question.translations or {},
         'image_url': question.image.url if question.image else None,
         'case': case_block_from_live(question.case) if question.case_id else None,
     }

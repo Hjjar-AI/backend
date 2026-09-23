@@ -14,6 +14,7 @@ EXPLANATION_TEXT_MAX_LENGTH = 3000
 CHOICE_TEXT_MAX_LENGTH = 300
 CASE_STEM_MAX_LENGTH = 3000
 CASE_GROUP_MAX_LENGTH = 64
+SOURCE_DOCUMENT_MAX_LENGTH = 500
 
 
 def clean_tag_name(name):
@@ -177,6 +178,26 @@ class Question(TimeStampedModel):
         null=True,
     )
     source = models.CharField(max_length=200, blank=True, null=True)
+    source_document = models.CharField(
+        max_length=SOURCE_DOCUMENT_MAX_LENGTH,
+        blank=True,
+        null=True,
+        help_text='Original document, file, book, or URL this question came from.',
+    )
+    source_page = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        help_text='One-based page number inside source_document.',
+    )
+    translations = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            'Localized content keyed by locale, e.g. '
+            '{"en": {"question": "...", "choices": [...], '
+            '"explanation": "..."}}.'
+        ),
+    )
     difficulty = models.CharField(max_length=20, choices=DIFFICULTY_CHOICES, default='medium')
     category = models.ForeignKey(
         Category,

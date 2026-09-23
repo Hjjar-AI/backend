@@ -6,6 +6,7 @@ from ....models import Question, Category, Tag, ClinicalCase
 from ..image_ingest import decode_import_image
 from ..author_resolution import collect_authors_from_envelope
 from .constants import STATE_IMPORT_MODE_REPLACE
+from .conflicts import use_imported_for
 from .plan import prepared_question, canonical_uuid
 from ....models import clean_tag_name, CASE_GROUP_MAX_LENGTH
 
@@ -43,7 +44,12 @@ def _analyze_unknown_authors(
     return unknown
 
 
-def _preview_state(payload, mode):
+def _preview_state(
+    payload,
+    mode,
+    conflict_strategy='keep_local',
+    conflict_resolutions=None,
+):
     """
     Compute the counters that a real import would report, without
     writing anything. Used by both the dry_run and analyze passes.
@@ -183,9 +189,16 @@ def _preview_state(payload, mode):
             uuid_str = prepared['uuid']
             is_draft = prepared['is_draft']
             if uuid_str in existing_q_uuids:
-                preview['questions_updated'] += 1
-                if is_draft:
-                    preview['drafts_updated'] += 1
+                if use_imported_for(
+                    uuid_str, conflict_strategy, conflict_resolutions,
+                ):
+                    preview['questions_updated'] += 1
+                    if is_draft:
+                        preview['drafts_updated'] += 1
+                else:
+                    preview['questions_skipped'] += 1
+                    if is_draft:
+                        preview['drafts_skipped'] += 1
             else:
                 preview['questions_created'] += 1
                 if is_draft:
@@ -199,9 +212,16 @@ def _preview_state(payload, mode):
             uuid_str = prepared['uuid']
             is_draft = prepared['is_draft']
             if uuid_str in existing_q_uuids:
-                preview['questions_skipped'] += 1
-                if is_draft:
-                    preview['drafts_skipped'] += 1
+                if use_imported_for(
+                    uuid_str, conflict_strategy, conflict_resolutions,
+                ):
+                    preview['questions_updated'] += 1
+                    if is_draft:
+                        preview['drafts_updated'] += 1
+                else:
+                    preview['questions_skipped'] += 1
+                    if is_draft:
+                        preview['drafts_skipped'] += 1
             else:
                 preview['questions_created'] += 1
                 if is_draft:
@@ -211,7 +231,12 @@ def _preview_state(payload, mode):
         prepared = prepared_question(entry)
         if prepared is None:
             continue
-        if mode != STATE_IMPORT_MODE_REPLACE and prepared['uuid'] in existing_q_uuids:
+        if (
+            prepared['uuid'] in existing_q_uuids
+            and not use_imported_for(
+                prepared['uuid'], conflict_strategy, conflict_resolutions,
+            )
+        ):
             continue
         img = entry.get('image')
         if isinstance(img, dict) and img.get('data_base64') and decode_import_image(img) is not None:

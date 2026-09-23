@@ -39,6 +39,7 @@ from ...validation import (
     clean_and_validate_choices,
     validate_correct_answer,
 )
+from ...translation_validation import normalize_translations
 
 from .validators import (
     MAX_CHOICES,
@@ -49,6 +50,11 @@ from .validators import (
     verify_upload_mime,
 )
 from .staging import stage_upload, cleanup_staged_upload
+from ..content_quality import (
+    flag_import_quality_issues,
+    prepare_import_content,
+    quality_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +265,20 @@ def _portable_question_uuid(row):
         raise ValueError('uuid السؤال غير صالح')
 
 
+def _extract_translations(row):
+    raw = row.get('translations')
+    if not isinstance(raw, dict):
+        raw = row.get('translations_json', raw)
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)) or raw == '':
+        return {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raise ValueError('translations_json غير صالح') from None
+    return normalize_translations(raw, max_choices=MAX_CHOICES)
+
+
 # ── Question construction ──────────────────────────────────────────────
 
 def _build_question(row, username, author=None, owner=None):
@@ -318,6 +338,7 @@ def _build_question(row, username, author=None, owner=None):
         choices,
         None,
         max_choices=MAX_CHOICES,
+        allow_duplicates=True,
     )
     if choice_error is not None:
         raise ValueError(choice_error['message'])
@@ -355,6 +376,9 @@ def _build_question(row, username, author=None, owner=None):
         correct_answer=correct,
         explanation=explanation,
         source=_cell_to_str(row.get('source'))[:200],
+        source_document=_cell_to_str(row.get('source_document'))[:500] or None,
+        source_page=_parse_optional_positive_int(row.get('source_page')),
+        translations=_extract_translations(row),
         difficulty=parse_difficulty(row.get('difficulty', 'medium')),
         category_id=_resolve_category(row),
         authored_by=author,
@@ -387,6 +411,11 @@ def _persist_records(records, username, author=None, owner=None):
 
     count = 0
     skipped = 0
+    flagged = 0
+    seen_question_keys = {
+        quality_key(text)
+        for text in Question.objects.values_list('question', flat=True)
+    }
     with transaction.atomic():
         for row in records:
             question, tags = _build_question(
@@ -395,12 +424,23 @@ def _persist_records(records, username, author=None, owner=None):
             if Question.objects.filter(uuid=question.uuid).exists():
                 skipped += 1
                 continue
+            (
+                question.question,
+                question.choices,
+                quality_issues,
+            ) = prepare_import_content(
+                question.question,
+                question.choices,
+                seen_question_keys,
+            )
             question.save()
             for tag_name in tags:
                 tag, _ = Tag.objects.get_or_create(name=tag_name)
                 question.tags.add(tag)
+            if flag_import_quality_issues(question, owner, quality_issues):
+                flagged += 1
             count += 1
-    return count, skipped
+    return count, skipped, flagged
 
 
 # ── Public entry point ─────────────────────────────────────────────────
@@ -489,7 +529,7 @@ def import_file(file, username):
                 'code': 400,
             }
 
-        count, skipped = _persist_records(
+        count, skipped, flagged = _persist_records(
             records, username, author=user, owner=user,
         )
 
@@ -498,6 +538,7 @@ def import_file(file, username):
             'message': f'تم استيراد {count} سؤال بنجاح',
             'imported': count,
             'skipped': skipped,
+            'quality_flags_created': flagged,
         }
 
     except ValueError as ve:

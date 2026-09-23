@@ -4,7 +4,7 @@ Export → wipe → import round trip.
 
 This is the one test that catches drift between the exporter and
 the importer. Both files must agree on:
-  • every field name in the v2 envelope
+  • every field name in the current package schema
   • the shape of every section (categories, tags, cases, questions)
   • the uuid-as-identity contract
   • which fields are portable and which are local-only

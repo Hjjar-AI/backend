@@ -5,6 +5,7 @@ from . import views
 
 urlpatterns = [
     path('info/', views.DatabaseInfoView.as_view(), name='db-info'),
+    path('data-quality/', views.DataQualityReportView.as_view(), name='db-data-quality'),
     path('backup/', views.CreateBackupView.as_view(), name='db-backup'),
     path('backups/', views.ListBackupsView.as_view(), name='db-backups-list'),
     path('restore/', views.RestoreBackupView.as_view(), name='db-restore'),
@@ -12,7 +13,7 @@ urlpatterns = [
     path('import/', views.ImportDatabaseView.as_view(), name='db-import'),
     path('import/telegram/', views.ImportTelegramView.as_view(), name='db-import-telegram'),
 
-    # ── Full questions-data envelope ─────────────────────────────
+    # ── Portable question-bank package ───────────────────────────
     # Placed before the wildcard `export/<str:fmt>/` route so the
     # literal `state` segment is not captured by the format matcher.
     path('export/state/', views.ExportStateView.as_view(), name='db-export-state'),

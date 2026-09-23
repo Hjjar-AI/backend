@@ -94,7 +94,13 @@ def validate_correct_answer(correct_answer, num_choices):
     return None
 
 
-def clean_and_validate_choices(choices, correct_answer=None, max_choices=None):
+def clean_and_validate_choices(
+    choices,
+    correct_answer=None,
+    max_choices=None,
+    *,
+    allow_duplicates=False,
+):
     """
     Normalize and validate a question's choice list and correct-answer
     index.
@@ -150,16 +156,19 @@ def clean_and_validate_choices(choices, correct_answer=None, max_choices=None):
                 ),
             }
 
-    # 5. Case-insensitive duplicate check.
-    seen = set()
-    for c in cleaned:
-        lower = c.lower()
-        if lower in seen:
-            return None, {
-                'field': None,
-                'message': f'يوجد خيار مكرر: {c}',
-            }
-        seen.add(lower)
+    # 5. Case-insensitive duplicate check. Import paths may explicitly accept
+    # duplicates so they can mark the later choice and create a moderation
+    # flag; interactive/manual writes keep the strict default.
+    if not allow_duplicates:
+        seen = set()
+        for c in cleaned:
+            lower = c.lower()
+            if lower in seen:
+                return None, {
+                    'field': None,
+                    'message': f'يوجد خيار مكرر: {c}',
+                }
+            seen.add(lower)
 
     # 6. Correct-answer range (skipped when None).
     error = validate_correct_answer(correct_answer, len(cleaned))

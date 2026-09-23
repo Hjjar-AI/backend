@@ -1,6 +1,6 @@
 # backend/apps/questions/services/importing/state_import/entrypoint.py
 """
-Public entry point for the state-envelope import path (format v2).
+Public entry point for question-bank package imports (v2 migrates to v3).
 
 Three-phase flow used by the frontend:
 
@@ -28,14 +28,19 @@ from ..author_resolution import (
 from ..validators import get_user_safe, verify_upload_mime
 from ..staging import stage_upload, cleanup_staged_upload
 from ...state_workbook import read_state_workbook, StateWorkbookError
+from ...state_migrations import migrate_state_envelope, UnsupportedStateVersion
 from .constants import (
+    CONFLICT_KEEP_LOCAL,
+    CONFLICT_USE_IMPORTED,
     STATE_IMPORT_MODE_MERGE,
     STATE_IMPORT_MODE_REPLACE,
+    VALID_CONFLICT_STRATEGIES,
     VALID_STATE_IMPORT_MODES,
 )
 from .validation import _validate_state_envelope
 from .preview import _analyze_unknown_authors, _preview_state
 from .apply import _apply_state
+from .conflicts import analyze_conflicts
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +75,11 @@ def import_state(
     dry_run=False,
     analyze=False,
     mapping=None,
+    conflict_strategy=None,
+    conflict_resolutions=None,
 ):
     """
-    Import a full state envelope (v2).
+    Import a versioned question-bank package.
 
     mode       'merge' (default) or 'replace'.
     dry_run    write nothing, return counts only.
@@ -91,6 +98,21 @@ def import_state(
     """
     if mode not in VALID_STATE_IMPORT_MODES:
         return {'error': 'وضع الاستيراد غير صالح', 'code': 400}
+    if conflict_strategy is None:
+        conflict_strategy = (
+            CONFLICT_USE_IMPORTED
+            if mode == STATE_IMPORT_MODE_REPLACE
+            else CONFLICT_KEEP_LOCAL
+        )
+    if conflict_strategy not in VALID_CONFLICT_STRATEGIES:
+        return {'error': 'استراتيجية التعارض غير صالحة', 'code': 400}
+    if not isinstance(conflict_resolutions or {}, dict):
+        return {'error': 'حلول التعارض غير صالحة', 'code': 400}
+    if any(
+        decision not in {CONFLICT_KEEP_LOCAL, CONFLICT_USE_IMPORTED}
+        for decision in (conflict_resolutions or {}).values()
+    ):
+        return {'error': 'قرار تعارض غير صالح', 'code': 400}
 
     filename = str(getattr(file, 'name', '')).lower()
     if filename.endswith('.json'):
@@ -119,7 +141,14 @@ def import_state(
         else:
             with open(filepath, 'r', encoding='utf-8') as f:
                 payload = json.load(f)
-    except (OSError, UnicodeError, json.JSONDecodeError, StateWorkbookError):
+        payload, migrations_applied = migrate_state_envelope(payload)
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        StateWorkbookError,
+        UnsupportedStateVersion,
+    ):
         cleanup_staged_upload(filepath)
         return {'error': 'ملف الحالة غير صالح', 'code': 400}
 
@@ -142,6 +171,18 @@ def import_state(
         if err is not None:
             return err
 
+        if (
+            mode == STATE_IMPORT_MODE_REPLACE
+            and payload.get('meta', {}).get('scope') != 'full'
+        ):
+            return {
+                'error': (
+                    'لا يمكن استخدام الاستبدال مع حزمة انتقائية. '
+                    'استخدم الدمج/التحديث أو صدّر حزمة كاملة.'
+                ),
+                'code': 409,
+            }
+
         acting_user = get_user_safe(username)
         if not acting_user:
             return {'error': 'المستخدم غير موجود', 'code': 404}
@@ -150,28 +191,44 @@ def import_state(
         persisted_mappings = load_persisted_mappings()
 
         if analyze:
-            counts = _preview_state(payload, mode)
+            counts = _preview_state(
+                payload,
+                mode,
+                conflict_strategy,
+                conflict_resolutions,
+            )
             unknown = _analyze_unknown_authors(
                 payload,
                 uuid_to_user,
                 name_to_user,
                 persisted_mappings,
             )
+            conflicts = analyze_conflicts(payload)
             return {
                 'message': 'معاينة الاستيراد',
                 'mode': mode,
                 'dry_run': True,
                 'counts': counts,
                 'unknown_authors': unknown,
+                'conflicts': conflicts,
+                'conflict_count': len(conflicts),
+                'conflict_strategy': conflict_strategy,
+                'migrations_applied': migrations_applied,
             }
 
         if dry_run:
-            counts = _preview_state(payload, mode)
+            counts = _preview_state(
+                payload,
+                mode,
+                conflict_strategy,
+                conflict_resolutions,
+            )
             return {
                 'message': 'معاينة الاستيراد',
                 'mode': mode,
                 'dry_run': True,
                 'counts': counts,
+                'migrations_applied': migrations_applied,
             }
 
         # _apply_state and persist_mapping_decisions run inside ONE
@@ -190,6 +247,8 @@ def import_state(
                 name_to_user,
                 persisted_mappings,
                 mapping or {},
+                conflict_strategy,
+                conflict_resolutions or {},
             )
             persist_mapping_decisions(mapping or {}, acting_user)
 
@@ -198,6 +257,8 @@ def import_state(
             'mode': mode,
             'dry_run': False,
             'counts': result,
+            'conflict_strategy': conflict_strategy,
+            'migrations_applied': migrations_applied,
         }
 
     except ValueError as ve:

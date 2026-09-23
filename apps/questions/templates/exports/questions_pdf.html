@@ -94,14 +94,14 @@
         </div>
       {% endif %}
 
-      <div class="q-text">{{ q.question }}</div>
+      <div class="q-text">{{ q.pdf_question }}</div>
 
       {% if q.pdf_image_uri %}
         <img class="q-image" src="{{ q.pdf_image_uri }}" alt="{{ labels.question_image_alt }}">
       {% endif %}
 
       <ul class="q-choices">
-        {% for choice in q.choices %}
+        {% for choice in q.pdf_choices %}
           {% if forloop.counter == q.correct_answer %}
             <li class="q-choice q-choice--correct">
               <span class="choice-marker">{{ forloop.counter }}</span>
@@ -117,18 +117,30 @@
         {% endfor %}
       </ul>
 
-      {% if q.explanation %}
+      {% if q.pdf_explanation %}
         <div class="q-explanation">
           <strong>{{ labels.explanation }}:</strong>
-          {{ q.explanation }}
+          {{ q.pdf_explanation }}
         </div>
       {% endif %}
 
-      {% if q.source or q.tags.all %}
+      {% if q.source or q.source_document or q.source_page or q.tags.all %}
         <footer class="q-footer">
           {% if q.source %}
             <span class="q-meta-item">
               <span class="q-meta-label">{{ labels.source }}:</span> {{ q.source }}
+            </span>
+          {% endif %}
+          {% if q.source_document %}
+            <span class="q-meta-item">
+              <span class="q-meta-label">{{ labels.source_document }}:</span>
+              {{ q.source_document }}
+            </span>
+          {% endif %}
+          {% if q.source_page %}
+            <span class="q-meta-item">
+              <span class="q-meta-label">{{ labels.source_page }}:</span>
+              {{ q.source_page }}
             </span>
           {% endif %}
           {% if q.tags.all %}

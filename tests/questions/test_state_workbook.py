@@ -19,9 +19,11 @@ def _payload():
     return {
         'meta': {
             'format': 'mukhtabir-questions',
-            'version': 2,
+            'version': 3,
             'exported_at': '2026-01-01T00:00:00+00:00',
             'includes_images': True,
+            'scope': 'selection',
+            'selection': {'difficulty': 'easy'},
             'user_map': {
                 '11111111-1111-4111-8111-111111111111': {
                     'username': '=literal-author',
@@ -50,6 +52,15 @@ def _payload():
             'correct_answer': 1,
             'explanation': '',
             'source': '@literal-source',
+            'source_document': 'source.pdf',
+            'source_page': 12,
+            'translations': {
+                'ar': {
+                    'question': 'سؤال',
+                    'choices': ['أ', 'ب'],
+                    'explanation': 'شرح',
+                },
+            },
             'difficulty': 'easy',
             'category_uuid': '22222222-2222-4222-8222-222222222222',
             'tags': ['44444444-4444-4444-8444-444444444444'],
@@ -94,6 +105,11 @@ class StateWorkbookTests(SimpleTestCase):
         self.assertEqual(question['times_answered'], 7)
         self.assertEqual(question['times_correct'], 5)
         self.assertEqual(question['version'], 4)
+        self.assertEqual(question['source_document'], 'source.pdf')
+        self.assertEqual(question['source_page'], 12)
+        self.assertEqual(question['translations'], _payload()['questions'][0]['translations'])
+        self.assertEqual(restored['meta']['scope'], 'selection')
+        self.assertEqual(restored['meta']['selection'], {'difficulty': 'easy'})
         self.assertEqual(
             question['tags'], ['44444444-4444-4444-8444-444444444444'],
         )

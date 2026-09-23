@@ -201,7 +201,8 @@ def cleanup_old_temp_files(max_age_hours=1, safety_backup_max_age_hours=24 * 7):
                                         (the three importer entry points).
       • 'questions_export_'           — unverified flat export (xlsx/csv/json).
       • 'verified_questions_export_'  — verified flat export.
-      • 'questions_state_'            — state envelope export, both the
+      • 'questions_state_'            — legacy state-package exports
+      • 'question_bank_package_'      — portable package exports, both the
                                         plain and the `_verified` suffix
                                         forms (they share the prefix).
       • 'pre_restore_'                — the pre-restore safety snapshot;
@@ -224,6 +225,7 @@ def cleanup_old_temp_files(max_age_hours=1, safety_backup_max_age_hours=24 * 7):
         'questions_export_',
         'verified_questions_export_',
         'questions_state_',
+        'question_bank_package_',
     ]
     prefixes_safety = ['pre_restore_']
     deleted = 0

@@ -206,6 +206,7 @@ class ExamService:
                 'id': qid,
                 'text': snapshot.get('question') or '',
                 'choices': snapshot.get('choices') or [],
+                'translations': snapshot.get('translations') or {},
                 'image_url': snapshot_image_url(snapshot),
                 'case': case_block_from_snapshot(snapshot.get('case')),
             }

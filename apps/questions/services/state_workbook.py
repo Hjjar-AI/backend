@@ -28,7 +28,8 @@ _SHEET_COLUMNS = {
     'Metadata': ('key', 'value'),
     'Questions': (
         'uuid', 'question', 'choices_json', 'correct_answer', 'explanation',
-        'source', 'difficulty', 'category_uuid', 'case_uuid', 'case_order',
+        'source', 'source_document', 'source_page', 'translations_json',
+        'difficulty', 'category_uuid', 'case_uuid', 'case_order',
         'is_draft', 'verified', 'verified_by',
         'verified_at', 'verification_notes', 'authored_by_uuid',
         'authored_by_name', 'owned_by_uuid', 'owned_by_name', 'updated_by',
@@ -49,6 +50,15 @@ _SHEET_COLUMNS = {
         'question_uuid', 'filename', 'mime', 'chunk_index',
         'data_base64_chunk',
     ),
+}
+
+# Added to the state v3 envelope while workbook container v1 remained stable.
+# Readers accept their absence so an early v1/v2-state workbook can be migrated
+# by state_migrations.py after reconstruction.
+_OPTIONAL_COLUMNS = {
+    'Questions': {
+        'source_document', 'source_page', 'translations_json',
+    },
 }
 
 
@@ -115,6 +125,16 @@ def _json_list(value, field):
     return parsed
 
 
+def _json_object(value, field):
+    try:
+        parsed = json.loads(_text(value) or '{}')
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise StateWorkbookError(f'Invalid JSON object in {field}') from None
+    if not isinstance(parsed, dict):
+        raise StateWorkbookError(f'Invalid JSON object in {field}')
+    return parsed
+
+
 def _worksheet_rows(workbook, name):
     """Yield dictionaries from a worksheet while validating its header."""
     if name not in workbook.sheetnames:
@@ -131,7 +151,11 @@ def _worksheet_rows(workbook, name):
     if any(not value for value in header) or len(header) != len(set(header)):
         raise StateWorkbookError(f'Worksheet {name} has an invalid header')
 
-    missing = set(_SHEET_COLUMNS[name]) - set(header)
+    missing = (
+        set(_SHEET_COLUMNS[name])
+        - set(header)
+        - _OPTIONAL_COLUMNS.get(name, set())
+    )
     if missing:
         raise StateWorkbookError(
             f'Worksheet {name} is missing columns: {", ".join(sorted(missing))}'
@@ -174,6 +198,11 @@ def write_state_workbook(payload, filepath):
         ('state_version', meta.get('version')),
         ('exported_at', meta.get('exported_at') or ''),
         ('includes_images', bool(meta.get('includes_images'))),
+        ('scope', meta.get('scope') or 'full'),
+        (
+            'selection_json',
+            json.dumps(meta.get('selection') or {}, ensure_ascii=False),
+        ),
     )
     for row in metadata_rows:
         _append_row(metadata, row)
@@ -185,7 +214,10 @@ def write_state_workbook(payload, filepath):
             item.get('uuid'), item.get('question'),
             json.dumps(item.get('choices') or [], ensure_ascii=False),
             item.get('correct_answer'), item.get('explanation') or '',
-            item.get('source') or '', item.get('difficulty') or 'medium',
+            item.get('source') or '', item.get('source_document') or '',
+            item.get('source_page'),
+            json.dumps(item.get('translations') or {}, ensure_ascii=False),
+            item.get('difficulty') or 'medium',
             item.get('category_uuid') or '',
             item.get('case_uuid') or '', item.get('case_order'),
             bool(item.get('is_draft')), bool(item.get('verified')),
@@ -282,6 +314,10 @@ def read_state_workbook(filepath, *, max_uncompressed_size=None):
                 'includes_images': _boolean(
                     metadata.get('includes_images'), 'includes_images',
                 ),
+                'scope': _text(metadata.get('scope')) or 'full',
+                'selection': _json_object(
+                    metadata.get('selection_json'), 'selection_json',
+                ),
                 'user_map': {},
                 'counts': {},
             },
@@ -369,6 +405,18 @@ def read_state_workbook(filepath, *, max_uncompressed_size=None):
                 'updated_at': _text(row['updated_at'], nullable=True),
                 'image': None,
             }
+            if 'source_document' in row:
+                question['source_document'] = _text(
+                    row.get('source_document'), nullable=True,
+                )
+            if 'source_page' in row:
+                question['source_page'] = _integer(
+                    row.get('source_page'), 'source_page', nullable=True,
+                )
+            if 'translations_json' in row:
+                question['translations'] = _json_object(
+                    row.get('translations_json'), 'translations_json',
+                )
             if question['uuid'] in question_by_uuid:
                 raise StateWorkbookError('Questions contains a duplicate uuid')
             question_by_uuid[question['uuid']] = question

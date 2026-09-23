@@ -17,7 +17,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.questions.models import Question
 from apps.questions.services import ImportService
-from apps.feedback.models import Bookmark
+from apps.feedback.models import Bookmark, QuestionFlag
 from apps.users.models import User
 from tests.base import CacheClearingTestCase
 from tests.factories import make_user, make_question, make_category
@@ -105,6 +105,66 @@ class MergeModeTests(CacheClearingTestCase):
         self.assertTrue(
             Question.objects.filter(id=self.existing_q.id).exists()
         )
+
+    def test_use_imported_strategy_updates_a_conflicting_question(self):
+        payload = _envelope([
+            _q_entry(self.existing_uuid, text='Imported wins?'),
+        ])
+        result = ImportService.import_state(
+            _upload(payload), 'acting', mode='merge',
+            conflict_strategy='use_imported',
+        )
+
+        self.assertEqual(result['counts']['questions_updated'], 1)
+        self.existing_q.refresh_from_db()
+        self.assertEqual(self.existing_q.question, 'Imported wins?')
+
+    def test_review_strategy_applies_each_question_resolution(self):
+        payload = _envelope([
+            _q_entry(self.existing_uuid, text='Reviewed import?'),
+        ])
+        analysis = ImportService.import_state(
+            _upload(payload), 'acting', mode='merge',
+            analyze=True, conflict_strategy='review',
+        )
+        self.assertEqual(analysis['conflict_count'], 1)
+        self.assertIn('question', analysis['conflicts'][0]['changed_fields'])
+
+        ImportService.import_state(
+            _upload(payload), 'acting', mode='merge',
+            conflict_strategy='review',
+            conflict_resolutions={self.existing_uuid: 'use_imported'},
+        )
+        self.existing_q.refresh_from_db()
+        self.assertEqual(self.existing_q.question, 'Reviewed import?')
+
+    def test_v2_package_is_migrated_before_import(self):
+        payload = _envelope([_q_entry(str(uuid_mod.uuid4()), text='Legacy v2?')])
+        result = ImportService.import_state(_upload(payload), 'acting', mode='merge')
+
+        self.assertEqual(result['migrations_applied'], ['2→3'])
+        self.assertTrue(Question.objects.filter(question='Legacy v2?').exists())
+
+    def test_duplicate_question_and_choices_are_marked_and_flagged(self):
+        duplicate_uuid = str(uuid_mod.uuid4())
+        payload = _envelope([
+            _q_entry(
+                duplicate_uuid,
+                text='Original?',
+                choices=['Same', 'Same', 'Different'],
+            ),
+        ])
+        result = ImportService.import_state(_upload(payload), 'acting', mode='merge')
+
+        imported = Question.objects.get(uuid=duplicate_uuid)
+        self.assertIn('[DUP-', imported.question)
+        self.assertIn('[DUP-', imported.choices[1])
+        self.assertEqual(result['counts']['duplicates_marked'], 1)
+        self.assertTrue(QuestionFlag.objects.filter(
+            question=imported,
+            resolved=False,
+            reason__startswith='[DATA_QUALITY]',
+        ).exists())
 
 
 class ReplaceModeTests(CacheClearingTestCase):
@@ -213,6 +273,21 @@ class ReplaceModeTests(CacheClearingTestCase):
             _upload(payload), 'acting', mode='replace',
         )
         self.assertEqual(result.get('code'), 409)
+
+    def test_replace_rejects_a_selective_package(self):
+        payload = _envelope([_q_entry(self.covered_uuid)])
+        payload['meta'].update({
+            'version': 3,
+            'scope': 'selection',
+            'selection': {'difficulty': 'hard'},
+        })
+
+        result = ImportService.import_state(
+            _upload(payload), 'acting', mode='replace',
+        )
+
+        self.assertEqual(result.get('code'), 409)
+        self.assertTrue(Question.objects.filter(id=self.orphan_q.id).exists())
 
 
 class AnalyzePassTests(CacheClearingTestCase):

@@ -1,6 +1,6 @@
 # backend/apps/questions/services/exporting/state_export.py
 """
-State-envelope export path (format v2).
+Question-bank package export path (format v3).
 
 Produces the full questions-data envelope: categories, tags, cases,
 questions, and a user_map for the mapping UI. Images are embedded as
@@ -16,6 +16,7 @@ from django.utils import timezone
 from apps.core.artifacts import reserve_artifact_path, download_filename
 from apps.questions.services.state_format import STATE_FORMAT, STATE_FORMAT_VERSION
 from apps.questions.services.state_workbook import write_state_workbook
+from apps.questions.filters import filter_questions
 
 from ...models import Question, Category, Tag, ClinicalCase
 
@@ -26,7 +27,14 @@ logger = logging.getLogger(__name__)
 
 # Version and format identifiers for the state envelope.
 #
-# v2 — emitted by this revision. Adds:
+# v2 introduced portable UUID relationships. v3 adds:
+#   • meta.scope / meta.selection, so selective packages cannot be
+#     mistaken for complete-bank packages during destructive replace.
+#   • source_document / source_page provenance.
+#   • multilingual question translations.
+#
+# v2 packages remain accepted through state_migrations.py.
+# Historical v2 fields included:
 #   • uuid on every ported entity (categories, tags, cases, questions)
 #   • authored_by_uuid / owned_by_uuid per question
 #   • meta.user_map: uuid → { username, full_name } for every user
@@ -40,13 +48,14 @@ logger = logging.getLogger(__name__)
 #     default `is_draft=False`. The field is additive: an importer
 #     that ignores it stays buggy but does not error.
 #
-# Only v2 is accepted by the importer (see
-# state_import._validate_state_envelope). No v1 data exists yet.
-
-
-def export_state(include_images=True, verified_only=False, fmt='json'):
+def export_state(
+    include_images=True,
+    verified_only=False,
+    fmt='json',
+    filters=None,
+):
     """
-    Build the full questions-data envelope (format v2).
+    Build a portable question-bank package (format v3).
 
     Sections:
       • categories — full field set, keyed by uuid.
@@ -84,12 +93,20 @@ def export_state(include_images=True, verified_only=False, fmt='json'):
     if fmt not in {'json', 'xlsx'}:
         return {'error': 'صيغة تصدير الحالة غير مدعومة', 'code': 400}
 
+    filters = filters or None
+    selection = dict(filters or {})
+    if verified_only:
+        selection['verified_only'] = True
+    scope = 'selection' if selection else 'full'
+
     payload = {
         'meta': {
             'format': STATE_FORMAT,
             'version': STATE_FORMAT_VERSION,
             'exported_at': timezone.now().isoformat(),
             'includes_images': bool(include_images),
+            'scope': scope,
+            'selection': selection,
             'user_map': {},
             'counts': {},
         },
@@ -105,8 +122,12 @@ def export_state(include_images=True, verified_only=False, fmt='json'):
         .select_related('case', 'category', 'authored_by', 'owned_by')
         .prefetch_related('tags')
     )
-    if verified_only:
-        qs = qs.filter(verified=True)
+    qs = filter_questions(
+        qs,
+        filters,
+        export=True,
+        verified_only=verified_only,
+    )
 
     question_count = qs.count()
     question_limit = settings.MAX_STATE_IMPORT_QUESTIONS
@@ -146,6 +167,9 @@ def export_state(include_images=True, verified_only=False, fmt='json'):
             'correct_answer': q.correct_answer,
             'explanation': q.explanation or '',
             'source': q.source or '',
+            'source_document': q.source_document or '',
+            'source_page': q.source_page,
+            'translations': q.translations or {},
             'difficulty': q.difficulty,
             'category_uuid': (
                 str(q.category.uuid) if q.category_id else None
@@ -316,7 +340,7 @@ def export_state(include_images=True, verified_only=False, fmt='json'):
     suffix = '_verified' if verified_only else ''
     extension = '.xlsx' if fmt == 'xlsx' else '.json'
     filepath = reserve_artifact_path(
-        export_dir, f'questions_state{suffix}', extension,
+        export_dir, f'question_bank_package{suffix}', extension,
     )
     filename = download_filename(filepath)
 

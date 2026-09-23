@@ -109,6 +109,9 @@ def _row_for_flat_format(q, max_choices):
         'correct_answer': q.correct_answer,
         'explanation': sanitize_formula_cell(q.explanation),
         'source': sanitize_formula_cell(q.source),
+        'source_document': sanitize_formula_cell(q.source_document),
+        'source_page': q.source_page,
+        'translations_json': json.dumps(q.translations or {}, ensure_ascii=False),
         # Keep the legacy comma-separated column for spreadsheet users and add
         # a lossless JSON column for names that themselves contain commas.
         'tags': sanitize_formula_cell(','.join(tag_names)),
@@ -160,6 +163,9 @@ def _row_for_json(q):
         'correct_answer': q.correct_answer,
         'explanation': q.explanation,
         'source': q.source,
+        'source_document': q.source_document,
+        'source_page': q.source_page,
+        'translations': q.translations or {},
         # Preserve the long-standing comma-separated field for existing API
         # consumers, while ``tag_names`` provides a lossless representation
         # for names that contain commas.

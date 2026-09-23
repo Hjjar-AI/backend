@@ -187,7 +187,7 @@ def import_telegram(file, username):
                 'code': 400,
             }
 
-        count, skipped = _persist_records(
+        count, skipped, flagged = _persist_records(
             questions, username, author=user, owner=user,
         )
 
@@ -196,6 +196,7 @@ def import_telegram(file, username):
             'message': f'تم استيراد {count} سؤال من تلغرام',
             'imported': count,
             'skipped': skipped,
+            'quality_flags_created': flagged,
         }
 
     except ValueError as ve:

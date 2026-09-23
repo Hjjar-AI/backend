@@ -1,6 +1,6 @@
 # backend/apps/questions/services/importing/state_import/__init__.py
 """
-Package surface for the state-envelope import path (format v2).
+Package surface for question-bank package imports (current format v3).
 
 The implementation is split across:
 

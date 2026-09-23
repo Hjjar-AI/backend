@@ -102,7 +102,8 @@ _PDF_COPY = {
         'difficulty_label': 'الصعوبة', 'category': 'التصنيف',
         'tag': 'الوسم', 'tags': 'الوسوم',
         'clinical_case': 'حالة سريرية', 'explanation': 'الشرح',
-        'source': 'المصدر', 'about_title': 'من نحن',
+        'source': 'المصدر', 'source_document': 'المستند',
+        'source_page': 'الصفحة', 'about_title': 'من نحن',
         'question_image_alt': 'صورة السؤال', 'brand': 'مُختبِر',
     },
     'en': {
@@ -115,6 +116,7 @@ _PDF_COPY = {
         'difficulty_label': 'Difficulty', 'category': 'Category',
         'tag': 'Tag', 'tags': 'Tags', 'clinical_case': 'Clinical case',
         'explanation': 'Explanation', 'source': 'Source',
+        'source_document': 'Document', 'source_page': 'Page',
         'about_title': 'About Us', 'question_image_alt': 'Question image',
         'brand': 'Mukhtabir',
     },
@@ -522,6 +524,16 @@ def export_questions_pdf(
         q.difficulty_label = copy['difficulty'].get(
             q.difficulty, q.difficulty,
         )
+        translation = (q.translations or {}).get(locale) or {}
+        translated_choices = translation.get('choices') or []
+        q.pdf_question = translation.get('question') or q.question
+        q.pdf_choices = (
+            translated_choices
+            if len(translated_choices) == len(q.choices or [])
+            and all(translated_choices)
+            else q.choices
+        )
+        q.pdf_explanation = translation.get('explanation') or q.explanation
         _attach_pdf_image_uri(q)
 
     font_path = resolve_arabic_font_path()

@@ -25,6 +25,10 @@ from apps.core.throttles import (
     AdminPasswordRateThrottle,
 )
 from apps.questions.services import ImportService, ExportService
+from apps.questions.services.content_quality import (
+    build_data_quality_report,
+    flag_data_quality_report,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +192,29 @@ class DatabaseInfoView(APIView):
         if 'error' in result:
             return api_error(result['error'], result['code'])
         return api_success(data=result)
+
+
+class DataQualityReportView(APIView):
+    """Inspect question-bank quality and optionally create moderation flags."""
+
+    permission_classes = [HasCapability]
+    required_capability = 'admin.database'
+
+    def get(self, request):
+        return api_success(data=build_data_quality_report())
+
+    def post(self, request):
+        report = build_data_quality_report()
+        created = flag_data_quality_report(report, request.user)
+        report['flags_created'] = created
+        log_privileged_action(
+            request,
+            action='db.data_quality_flag',
+            target=None,
+            target_repr='question-bank:data-quality',
+            details={'flags_created': created},
+        )
+        return api_success(data=report)
 
 
 class CreateBackupView(APIView):
@@ -403,11 +430,13 @@ class ExportStateView(APIView):
         include_images = request.query_params.get('include_images', 'true') != 'false'
         verified_only = request.query_params.get('verified_only', 'false') == 'true'
         fmt = request.query_params.get('format', 'json').lower().strip()
+        filters = _extract_export_filters(request)
 
         result = ExportService.export_state(
             include_images=include_images,
             verified_only=verified_only,
             fmt=fmt,
+            filters=filters,
         )
         return _export_response(result)
 
@@ -435,6 +464,11 @@ class ImportStateView(APIView):
                         for this import AND is persisted at the end so
                         the next import of the same source skips the
                         prompt.
+        conflict_strategy
+                        keep_local | use_imported | review
+        conflict_resolutions
+                        JSON object keyed by question UUID. Values are
+                        keep_local or use_imported; used by review mode.
         admin_password  required when mode='replace' AND
                         dry_run=false AND analyze=false
     """
@@ -468,6 +502,17 @@ class ImportStateView(APIView):
                 return api_error('mapping يجب أن يكون كائناً', 400)
             mapping = parsed
 
+        conflict_strategy = request.data.get('conflict_strategy') or None
+        conflict_resolutions = None
+        resolutions_raw = request.data.get('conflict_resolutions')
+        if resolutions_raw:
+            try:
+                conflict_resolutions = json.loads(resolutions_raw)
+            except (TypeError, ValueError):
+                return api_error('صيغة conflict_resolutions غير صالحة', 400)
+            if not isinstance(conflict_resolutions, dict):
+                return api_error('conflict_resolutions يجب أن يكون كائناً', 400)
+
         is_write = not dry_run and not analyze
         if mode == 'replace' and is_write:
             admin_password = request.data.get('admin_password') or ''
@@ -481,6 +526,8 @@ class ImportStateView(APIView):
             dry_run=dry_run,
             analyze=analyze,
             mapping=mapping,
+            conflict_strategy=conflict_strategy,
+            conflict_resolutions=conflict_resolutions,
         )
         if 'error' in result:
             return api_error(result['error'], result['code'])

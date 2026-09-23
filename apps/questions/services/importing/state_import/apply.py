@@ -50,6 +50,7 @@ mode. Both call sites now use `_create_question_from_entry`.
 """
 
 import logging
+from collections import Counter
 from datetime import datetime
 
 from django.db import transaction
@@ -66,8 +67,15 @@ from ....models import (
 )
 from ..author_resolution import resolve_author
 from ..image_ingest import apply_image
-from ..validators import parse_difficulty
+from ...content_quality import (
+    flag_import_quality_issues,
+    prepare_import_content,
+    quality_key,
+)
+from ..validators import MAX_CHOICES, parse_difficulty
+from ....translation_validation import normalize_translations
 from .constants import STATE_IMPORT_MODE_REPLACE
+from .conflicts import use_imported_for
 from .identity import _find_existing_by_uuid_or_key
 from .plan import prepared_question, canonical_uuid
 
@@ -131,6 +139,11 @@ def _create_question_from_entry(
         correct_answer=prepared['correct_answer'],
         explanation=entry.get('explanation') or '',
         source=(entry.get('source') or '')[:200] or None,
+        source_document=(entry.get('source_document') or '')[:500] or None,
+        source_page=entry.get('source_page') or None,
+        translations=normalize_translations(
+            entry.get('translations') or {}, max_choices=MAX_CHOICES,
+        ),
         difficulty=difficulty,
         category=category,
         case=case,
@@ -159,6 +172,8 @@ def _apply_state(
     name_to_user,
     persisted_mappings,
     call_mappings,
+    conflict_strategy='keep_local',
+    conflict_resolutions=None,
 ):
     """
     Write the envelope to the database. Runs inside the caller's outer
@@ -209,12 +224,19 @@ def _apply_state(
         'questions_with_local_author': 0,
         'questions_with_mapped_author': 0,
         'questions_with_unresolved_author': 0,
+        'quality_flags_created': 0,
+        'duplicates_marked': 0,
     }
 
     # Authors whose authored_by set may have changed. Recomputed in
     # one batch after the write loop, mirroring the pattern in
     # QuestionService.bulk_verify.
     affected_author_ids = set()
+    seen_question_keys = Counter(
+        quality_key(text)
+        for text in Question.objects.values_list('question', flat=True)
+        if quality_key(text)
+    )
 
     with transaction.atomic():
         # ── Categories ────────────────────────────────────────────
@@ -430,14 +452,86 @@ def _apply_state(
 
             existing_q = existing_q_by_uuid.get(uuid_str)
 
-            # ── Merge mode: skip existing, create new ─────────────
-            if mode != STATE_IMPORT_MODE_REPLACE:
-                if existing_q is not None:
-                    counts['questions_skipped'] += 1
-                    if prepared['is_draft']:
-                        counts['drafts_skipped'] += 1
-                    continue
+            if existing_q is not None and not use_imported_for(
+                uuid_str, conflict_strategy, conflict_resolutions,
+            ):
+                counts['questions_skipped'] += 1
+                if prepared['is_draft']:
+                    counts['drafts_skipped'] += 1
+                continue
 
+            # The live row's current text is already in the counter. Remove
+            # that one occurrence before checking its replacement, so an
+            # unchanged update does not conflict with itself while a match to
+            # any *other* local/imported question is still marked.
+            if existing_q is not None:
+                old_key = quality_key(existing_q.question)
+                if old_key:
+                    seen_question_keys[old_key] -= 1
+
+            (
+                prepared['question'],
+                prepared['choices'],
+                quality_issues,
+            ) = prepare_import_content(
+                prepared['question'],
+                prepared['choices'],
+                seen_question_keys,
+            )
+
+            if existing_q is not None:
+                # UPDATE in place for either merge or replace when the chosen
+                # conflict policy says imported content wins.
+                if existing_q.authored_by_id is not None:
+                    affected_author_ids.add(existing_q.authored_by_id)
+
+                is_draft = prepared['is_draft']
+                existing_q.question = prepared['question']
+                existing_q.choices = prepared['choices']
+                existing_q.correct_answer = prepared['correct_answer']
+                existing_q.explanation = entry.get('explanation') or ''
+                existing_q.source = (entry.get('source') or '')[:200] or None
+                if 'source_document' in entry:
+                    existing_q.source_document = (
+                        (entry.get('source_document') or '')[:500] or None
+                    )
+                if 'source_page' in entry:
+                    existing_q.source_page = entry.get('source_page') or None
+                if 'translations' in entry:
+                    existing_q.translations = normalize_translations(
+                        entry.get('translations') or {}, max_choices=MAX_CHOICES,
+                    )
+                existing_q.difficulty = difficulty
+                existing_q.category = category
+                existing_q.case = case
+                existing_q.case_order = entry.get('case_order') or None
+                existing_q.is_draft = is_draft
+                existing_q.draft_owner = acting_user if is_draft else None
+                existing_q.verified = bool(entry.get('verified', False))
+                existing_q.verified_by = entry.get('verified_by') or None
+                existing_q.verified_at = verified_at
+                existing_q.verification_notes = (
+                    entry.get('verification_notes') or None
+                )
+                existing_q.authored_by = author
+                existing_q.owned_by = acting_user
+                if 'updated_by' in entry:
+                    existing_q.updated_by = (
+                        (entry.get('updated_by') or '')[:80] or None
+                    )
+                if 'times_answered' in entry:
+                    existing_q.times_answered = entry['times_answered']
+                if 'times_correct' in entry:
+                    existing_q.times_correct = entry['times_correct']
+                if 'version' in entry:
+                    existing_q.version = entry['version']
+                existing_q.save()
+
+                q = existing_q
+                counts['questions_updated'] += 1
+                if is_draft:
+                    counts['drafts_updated'] += 1
+            else:
                 q = _create_question_from_entry(
                     entry=entry,
                     prepared=prepared,
@@ -451,68 +545,6 @@ def _apply_state(
                 counts['questions_created'] += 1
                 if prepared['is_draft']:
                     counts['drafts_created'] += 1
-
-            # ── Replace mode: upsert ──────────────────────────────
-            else:
-                if existing_q is not None:
-                    # UPDATE in place. Record the previous author so
-                    # a re-attribution refreshes BOTH users' scores.
-                    if existing_q.authored_by_id is not None:
-                        affected_author_ids.add(existing_q.authored_by_id)
-
-                    is_draft = prepared['is_draft']
-                    existing_q.question = prepared['question']
-                    existing_q.choices = prepared['choices']
-                    existing_q.correct_answer = prepared['correct_answer']
-                    existing_q.explanation = entry.get('explanation') or ''
-                    existing_q.source = (entry.get('source') or '')[:200] or None
-                    existing_q.difficulty = difficulty
-                    existing_q.category = category
-                    existing_q.case = case
-                    existing_q.case_order = entry.get('case_order') or None
-                    existing_q.is_draft = is_draft
-                    existing_q.draft_owner = acting_user if is_draft else None
-                    existing_q.verified = bool(entry.get('verified', False))
-                    existing_q.verified_by = entry.get('verified_by') or None
-                    existing_q.verified_at = verified_at
-                    existing_q.verification_notes = (
-                        entry.get('verification_notes') or None
-                    )
-                    existing_q.authored_by = author
-                    existing_q.owned_by = acting_user
-                    # These fields were added additively to v2. Preserve
-                    # local values when importing an older v2 envelope that
-                    # predates them; current exports always include them.
-                    if 'updated_by' in entry:
-                        existing_q.updated_by = (
-                            (entry.get('updated_by') or '')[:80] or None
-                        )
-                    if 'times_answered' in entry:
-                        existing_q.times_answered = entry['times_answered']
-                    if 'times_correct' in entry:
-                        existing_q.times_correct = entry['times_correct']
-                    if 'version' in entry:
-                        existing_q.version = entry['version']
-                    existing_q.save()
-
-                    q = existing_q
-                    counts['questions_updated'] += 1
-                    if is_draft:
-                        counts['drafts_updated'] += 1
-                else:
-                    q = _create_question_from_entry(
-                        entry=entry,
-                        prepared=prepared,
-                        difficulty=difficulty,
-                        category=category,
-                        case=case,
-                        author=author,
-                        acting_user=acting_user,
-                        verified_at=verified_at,
-                    )
-                    counts['questions_created'] += 1
-                    if prepared['is_draft']:
-                        counts['drafts_created'] += 1
 
             if author is not None:
                 affected_author_ids.add(author.id)
@@ -531,6 +563,10 @@ def _apply_state(
                     counts['images_imported'] += 1
 
             _restore_question_timestamps(q, entry)
+            if quality_issues:
+                counts['duplicates_marked'] += 1
+                if flag_import_quality_issues(q, acting_user, quality_issues):
+                    counts['quality_flags_created'] += 1
 
     # ── Trust recompute (batch) ───────────────────────────────────
     affected_author_ids.add(acting_user.id)

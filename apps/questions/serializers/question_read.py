@@ -52,6 +52,7 @@ class QuestionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'uuid',
             'question', 'choices', 'correct_answer', 'explanation', 'source',
+            'source_document', 'source_page', 'translations',
             'image_url',
             'tags', 'difficulty', 'category', 'category_name', 'category_color',
             'verified', 'verified_by', 'verified_at', 'verification_notes',

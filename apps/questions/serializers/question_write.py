@@ -11,6 +11,7 @@ from ..validation import (
     clean_and_validate_choices,
     validate_correct_answer,
 )
+from ..translation_validation import normalize_translations
 from .constants import MAX_CHOICES
 from .case_resolver import _resolve_case
 from ..write_fields import (
@@ -28,6 +29,9 @@ class _QuestionWriteFields(serializers.ModelSerializer):
         allow_blank=True, allow_null=True,
     )
     choices = choices_field(MAX_CHOICES, required=False)
+    source_page = serializers.IntegerField(
+        min_value=1, required=False, allow_null=True,
+    )
     case_key = case_key_field()
     case_stem = case_stem_field()
     case_order = case_order_field()
@@ -36,9 +40,16 @@ class _QuestionWriteFields(serializers.ModelSerializer):
         model = Question
         fields = [
             'question', 'choices', 'correct_answer', 'explanation', 'source',
+            'source_document', 'source_page', 'translations',
             'tags', 'difficulty', 'category',
             'case_key', 'case_stem', 'case_order',
         ]
+
+    def validate_translations(self, value):
+        try:
+            return normalize_translations(value, max_choices=MAX_CHOICES)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class QuestionCreateSerializer(_QuestionWriteFields):

@@ -10,7 +10,7 @@ modules:
   • validators.py         — shared MIME / value validation
   • flat_import.py        — XLSX / XLS / CSV / JSON
   • telegram_import.py    — Telegram poll exports
-  • state_import.py       — full state envelope (v2)
+  • state_import.py       — question-bank package import (v2/v3)
   • author_resolution.py  — envelope author attribution
   • image_ingest.py       — base64 image attachment
 """
@@ -58,9 +58,11 @@ class ImportService:
         dry_run=False,
         analyze=False,
         mapping=None,
+        conflict_strategy=None,
+        conflict_resolutions=None,
     ):
         """
-        Full state-envelope import (v2). See state_import.import_state
+        Question-bank package import. See state_import.import_state
         for the analyze / dry_run / merge / replace semantics.
         """
         return _import_state(
@@ -70,6 +72,8 @@ class ImportService:
             dry_run=dry_run,
             analyze=analyze,
             mapping=mapping,
+            conflict_strategy=conflict_strategy,
+            conflict_resolutions=conflict_resolutions,
         )
 
 

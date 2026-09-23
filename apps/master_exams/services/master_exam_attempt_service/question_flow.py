@@ -45,6 +45,7 @@ def current_question(attempt):
         payload.update({
             'text': snapshot['question'],
             'choices': snapshot['choices'],
+            'translations': snapshot.get('translations') or {},
             'image_url': snapshot_image_url(snapshot),
             'case': (
                 {key: snapshot['case'][key] for key in ('id', 'key', 'stem')}

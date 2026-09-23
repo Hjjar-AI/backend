@@ -38,6 +38,8 @@ class StateExportTests(CacheClearingTestCase):
         payload = self._payload(result)
         self.assertEqual(payload['meta']['format'], STATE_FORMAT)
         self.assertEqual(payload['meta']['version'], STATE_FORMAT_VERSION)
+        self.assertEqual(payload['meta']['scope'], 'full')
+        self.assertEqual(payload['meta']['selection'], {})
         self.assertEqual(payload['questions'], [])
         self.assertEqual(payload['categories'], [])
         self.assertEqual(payload['tags'], [])
@@ -72,6 +74,56 @@ class StateExportTests(CacheClearingTestCase):
         self.assertEqual(exported['updated_by'], 'moderator')
         self.assertIsNotNone(exported['created_at'])
         self.assertIsNotNone(exported['updated_at'])
+
+    def test_provenance_and_translations_are_exported(self):
+        author = make_user('translated_author')
+        question = make_question(owner=author, question='Original?')
+        question.source_document = 'source.pdf'
+        question.source_page = 17
+        question.translations = {
+            'ar': {
+                'question': 'الأصل؟',
+                'choices': ['نعم', 'لا'],
+                'explanation': 'شرح',
+            },
+        }
+        question.save(update_fields=[
+            'source_document', 'source_page', 'translations',
+        ])
+
+        exported = self._payload(ExportService.export_state())['questions'][0]
+        self.assertEqual(exported['source_document'], 'source.pdf')
+        self.assertEqual(exported['source_page'], 17)
+        self.assertEqual(exported['translations'], question.translations)
+
+    def test_filters_create_a_selective_portable_package(self):
+        author = make_user('selection_author')
+        selected_category = make_category('selected')
+        other_category = make_category('other')
+        make_question(
+            owner=author, question='Selected?',
+            category=selected_category, difficulty='hard',
+        )
+        make_question(
+            owner=author, question='Excluded?',
+            category=other_category, difficulty='easy',
+        )
+
+        payload = self._payload(ExportService.export_state(filters={
+            'difficulty': 'hard',
+            'category_ids': str(selected_category.id),
+        }))
+
+        self.assertEqual(payload['meta']['scope'], 'selection')
+        self.assertEqual(payload['meta']['selection']['difficulty'], 'hard')
+        self.assertEqual(
+            [question['question'] for question in payload['questions']],
+            ['Selected?'],
+        )
+        self.assertEqual(
+            [category['name'] for category in payload['categories']],
+            ['selected'],
+        )
 
     def test_xlsx_is_a_lossless_container_for_state_envelope(self):
         author = make_user('xlsx_author')
@@ -196,7 +248,7 @@ class StateExportTests(CacheClearingTestCase):
         self.assertEqual(counts['cases'], len(payload['cases']))
         self.assertEqual(counts['users'], len(payload['meta']['user_map']))
 
-    def test_exported_envelope_is_valid_v2(self):
+    def test_exported_envelope_is_valid_current_schema(self):
         """
         The envelope this export produces must pass the importer's
         own validation. This is the export-side half of the
@@ -212,7 +264,7 @@ class StateExportTests(CacheClearingTestCase):
         err = _validate_state_envelope(payload)
         self.assertIsNone(err)
 
-    def test_questions_have_all_v2_fields(self):
+    def test_questions_have_all_v3_fields(self):
         author = make_user('author')
         make_question(owner=author)
 
@@ -220,7 +272,8 @@ class StateExportTests(CacheClearingTestCase):
         q = payload['questions'][0]
         required = {
             'uuid', 'question', 'choices', 'correct_answer', 'explanation',
-            'source', 'difficulty', 'category_uuid', 'tags', 'case_uuid',
+            'source', 'source_document', 'source_page', 'translations',
+            'difficulty', 'category_uuid', 'tags', 'case_uuid',
             'case_order', 'is_draft', 'verified', 'verified_by',
             'verified_at', 'verification_notes',
             'authored_by_uuid', 'authored_by_name',
@@ -244,4 +297,7 @@ class StateExportTests(CacheClearingTestCase):
         result = ExportService.export_state()
 
         self.assertEqual(result.get('code'), 413)
-        self.assertEqual(list(Path(self.tmpdir).glob('questions_state*.json')), [])
+        self.assertEqual(
+            list(Path(self.tmpdir).glob('question_bank_package*.json')),
+            [],
+        )

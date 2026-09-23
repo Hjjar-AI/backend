@@ -8,7 +8,7 @@ method delegates to a module-level function in one of the sibling
 modules:
 
   • flat_export.py         — XLSX / CSV / JSON
-  • state_export.py        — full state envelope (v2)
+  • state_export.py        — portable question-bank package (v3)
   • image_export.py        — base64 image encoding
   • formula_sanitizer.py   — spreadsheet formula-injection defense
   • pdf_export.py          — PDF rendering (WeasyPrint)
@@ -69,20 +69,21 @@ class ExportService:
         )
 
     @staticmethod
-    def export_state(include_images=True, verified_only=False, fmt='json'):
+    def export_state(
+        include_images=True,
+        verified_only=False,
+        fmt='json',
+        filters=None,
+    ):
         """
-        Full state envelope (v2). See state_export.export_state.
-
-        NOTE: state export is a full backup of the categories / tags /
-        cases / questions graph. Filtering it would produce an
-        envelope that cannot be round-tripped into a working system,
-        and a document title has no place in a machine-readable
-        backup. Neither `filters` nor `title` is accepted here.
+        Portable question-bank package (v3). Filters create a selective
+        package whose scope metadata prevents destructive replace import.
         """
         return _export_state(
             include_images=include_images,
             verified_only=verified_only,
             fmt=fmt,
+            filters=filters,
         )
 
 

@@ -26,6 +26,32 @@ class QuestionCreateSerializerTests(SimpleTestCase):
         s = self._s(self._valid())
         self.assertTrue(s.is_valid(), s.errors)
 
+    def test_provenance_and_multilingual_fields_are_normalized(self):
+        s = self._s(self._valid(
+            source_document='source.pdf',
+            source_page=9,
+            translations={
+                'EN_us': {
+                    'question': 'Translated question?',
+                    'choices': ['Yes', 'No'],
+                    'explanation': 'Explanation',
+                },
+            },
+        ))
+
+        self.assertTrue(s.is_valid(), s.errors)
+        self.assertEqual(s.validated_data['source_document'], 'source.pdf')
+        self.assertEqual(s.validated_data['source_page'], 9)
+        self.assertIn('en-US', s.validated_data['translations'])
+
+    def test_translation_requires_question_text(self):
+        s = self._s(self._valid(translations={
+            'ar': {'choices': ['أ', 'ب']},
+        }))
+
+        self.assertFalse(s.is_valid())
+        self.assertIn('translations', s.errors)
+
     def test_missing_question_rejected(self):
         data = self._valid()
         del data['question']

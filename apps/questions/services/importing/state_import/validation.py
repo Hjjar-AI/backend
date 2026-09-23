@@ -11,6 +11,7 @@ from django.conf import settings
 
 from ..validators import _is_valid_uuid, MAX_CHOICES
 from apps.questions.image_policy import MAX_IMAGE_SIZE
+from apps.questions.translation_validation import normalize_translations
 from .constants import STATE_FORMAT, STATE_FORMAT_VERSION
 from ....models import (
     CATEGORY_NAME_MAX_LENGTH,
@@ -20,12 +21,13 @@ from ....models import (
     QUESTION_TEXT_MAX_LENGTH,
     CHOICE_TEXT_MAX_LENGTH,
     EXPLANATION_TEXT_MAX_LENGTH,
+    SOURCE_DOCUMENT_MAX_LENGTH,
 )
 
 
 def _validate_state_envelope(payload):
     """
-    Return None if the payload is a valid v2 envelope, or a
+    Return None if the payload is a valid current-schema package, or a
     {'error': ..., 'code': ...} dict otherwise.
 
     Validates:
@@ -55,6 +57,12 @@ def _validate_state_envelope(payload):
             ),
             'code': 400,
         }
+
+    scope = meta.get('scope', 'full')
+    if scope not in {'full', 'selection'}:
+        return {'error': "الحقل 'meta.scope' غير صالح", 'code': 400}
+    if not isinstance(meta.get('selection', {}), dict):
+        return {'error': "الحقل 'meta.selection' غير صالح", 'code': 400}
 
     for key in ('categories', 'tags', 'cases', 'questions'):
         if key not in payload or not isinstance(payload.get(key), list):
@@ -213,8 +221,9 @@ def _validate_state_envelope(payload):
             return {'error': f'السؤال رقم {idx + 1}: يوجد اختيار فارغ', 'code': 400}
         if any(len(choice) > CHOICE_TEXT_MAX_LENGTH for choice in cleaned_choices):
             return {'error': f'السؤال رقم {idx + 1}: نص الاختيار طويل جداً', 'code': 400}
-        if len({choice.casefold() for choice in cleaned_choices}) != len(cleaned_choices):
-            return {'error': f'السؤال رقم {idx + 1}: الاختيارات مكررة', 'code': 400}
+        # Duplicate choices are accepted by package import. The write pass
+        # marks later duplicates with a visible random suffix and creates a
+        # normal moderation flag for review.
         try:
             if isinstance(entry.get('correct_answer'), bool):
                 raise ValueError
@@ -241,12 +250,33 @@ def _validate_state_envelope(payload):
 
         for field, max_length in (
             ('source', 200),
+            ('source_document', SOURCE_DOCUMENT_MAX_LENGTH),
             ('verified_by', 80),
             ('updated_by', 80),
         ):
             value = entry.get(field) or ''
             if not isinstance(value, str) or len(value) > max_length:
                 return {'error': f'السؤال رقم {idx + 1}: {field} غير صالح', 'code': 400}
+        source_page = entry.get('source_page')
+        if source_page is not None and (
+            not isinstance(source_page, int)
+            or isinstance(source_page, bool)
+            or source_page < 1
+        ):
+            return {
+                'error': f'السؤال رقم {idx + 1}: source_page غير صالح',
+                'code': 400,
+            }
+        try:
+            normalize_translations(
+                entry.get('translations') or {},
+                max_choices=MAX_CHOICES,
+            )
+        except ValueError as exc:
+            return {
+                'error': f'السؤال رقم {idx + 1}: {exc}',
+                'code': 400,
+            }
         verification_notes = entry.get('verification_notes')
         if verification_notes is not None and not isinstance(verification_notes, str):
             return {'error': f'السؤال رقم {idx + 1}: verification_notes غير صالح', 'code': 400}
