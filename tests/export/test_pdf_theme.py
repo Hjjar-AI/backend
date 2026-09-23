@@ -60,6 +60,81 @@ class PdfThemeTests(SimpleTestCase):
         self.assertIn('background: #0d1218', stylesheet)
         self.assertIn('background: #18212a', stylesheet)
         self.assertIn('#e6a15b', stylesheet)
+        write_options = html.return_value.write_pdf.call_args.kwargs
+        self.assertEqual(write_options['pdf_variant'], 'pdf/a-3u')
+        self.assertTrue(write_options['pdf_tags'])
+        self.assertTrue(write_options['srgb'])
+
+    def test_locale_and_structured_front_matter_reach_template(self):
+        question = SimpleNamespace(
+            difficulty='hard', category_id=None, category=None,
+        )
+        front_matter = {
+            'enabled': True,
+            'heading': 'About the publisher',
+            'body': 'A short introduction.',
+            'fields': [
+                {'label': 'Edition', 'value': '2026'},
+                {'label': '', 'value': 'ignored'},
+            ],
+        }
+
+        with TemporaryDirectory() as export_dir, override_settings(
+            EXPORT_FOLDER=export_dir,
+        ), patch(
+            'apps.questions.services.exporting.pdf_export.render_to_string',
+            return_value='<html></html>',
+        ) as render, patch(
+            'apps.questions.services.exporting.pdf_export.resolve_arabic_font_path',
+            return_value=None,
+        ), patch('weasyprint.CSS'), patch('weasyprint.HTML') as html:
+            html.return_value.write_pdf.side_effect = (
+                lambda path, **_: Path(path).write_bytes(b'%PDF-test')
+            )
+            result = export_questions_pdf(
+                [question], locale='en', front_matter=front_matter,
+            )
+
+        self.assertNotIn('error', result)
+        context = render.call_args.args[1]
+        self.assertEqual(context['locale'], 'en')
+        self.assertEqual(context['direction'], 'ltr')
+        self.assertEqual(context['doc_title'], 'Question Bank')
+        self.assertEqual(context['front_matter']['heading'], 'About the publisher')
+        self.assertEqual(
+            context['front_matter']['fields'],
+            [{'label': 'Edition', 'value': '2026'}],
+        )
+
+    def test_question_image_is_embedded_as_a_data_uri(self):
+        question = SimpleNamespace(
+            difficulty='medium', category_id=None, category=None,
+            image=object(),
+        )
+
+        with TemporaryDirectory() as export_dir, override_settings(
+            EXPORT_FOLDER=export_dir,
+        ), patch(
+            'apps.questions.services.exporting.pdf_export.render_to_string',
+            return_value='<html></html>',
+        ), patch(
+            'apps.questions.services.exporting.pdf_export.resolve_arabic_font_path',
+            return_value=None,
+        ), patch(
+            'apps.questions.services.exporting.pdf_export.read_image_as_base64',
+            return_value={
+                'mime': 'image/png',
+                'data_base64': 'cG5n',
+                'filename': 'question.png',
+            },
+        ), patch('weasyprint.CSS'), patch('weasyprint.HTML') as html:
+            html.return_value.write_pdf.side_effect = (
+                lambda path, **_: Path(path).write_bytes(b'%PDF-test')
+            )
+            result = export_questions_pdf([question])
+
+        self.assertNotIn('error', result)
+        self.assertEqual(question.pdf_image_uri, 'data:image/png;base64,cG5n')
 
 
 class PdfThemeRenderTests(CacheClearingTestCase):

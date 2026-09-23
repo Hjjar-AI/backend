@@ -101,6 +101,7 @@ def _row_for_flat_format(q, max_choices):
     authored_by_username = q.authored_by.username if q.authored_by_id else ''
     owned_by_username = q.owned_by.username if q.owned_by_id else ''
 
+    tag_names = [t.name for t in q.tags.all()]
     row = {
         'id': q.id,
         'uuid': str(q.uuid),
@@ -108,9 +109,14 @@ def _row_for_flat_format(q, max_choices):
         'correct_answer': q.correct_answer,
         'explanation': sanitize_formula_cell(q.explanation),
         'source': sanitize_formula_cell(q.source),
-        'tags': sanitize_formula_cell(','.join([t.name for t in q.tags.all()])),
+        # Keep the legacy comma-separated column for spreadsheet users and add
+        # a lossless JSON column for names that themselves contain commas.
+        'tags': sanitize_formula_cell(','.join(tag_names)),
+        'tags_json': json.dumps(tag_names, ensure_ascii=False),
         'difficulty': q.difficulty,
         'category_id': q.category_id,
+        'category_uuid': str(q.category.uuid) if q.category_id else None,
+        'category_name': sanitize_formula_cell(q.category.name) if q.category_id else '',
         'verified': q.verified,
         'verified_by': sanitize_formula_cell(q.verified_by),
         'verified_at': q.verified_at.isoformat() if q.verified_at else None,
@@ -128,6 +134,8 @@ def _row_for_flat_format(q, max_choices):
         'times_correct': q.times_correct,
         'case_key': case_key,
         'case_group': case_key,   # legacy column name, same value
+        'case_uuid': str(q.case.uuid) if q.case_id else None,
+        'case_title': sanitize_formula_cell(q.case.title) if q.case_id else '',
         'case_stem': sanitize_formula_cell(case_stem),
         'case_order': q.case_order,
     }
@@ -140,43 +148,44 @@ def _row_for_flat_format(q, max_choices):
 
 def _row_for_json(q):
     """Item dict for JSON export."""
+    tag_names = [t.name for t in q.tags.all()]
     return {
         'id': q.id,
         'uuid': str(q.uuid),
-        'question': sanitize_formula_cell(q.question),
-        'choices': [
-            sanitize_formula_cell(c)
-            for c in (q.choices if isinstance(q.choices, list) else [])
-        ],
+        # JSON is a data format, not a spreadsheet.  Formula-prefix escaping
+        # here used to corrupt legitimate leading '=', '+', '-', and '@'
+        # characters on a JSON export/import round trip.
+        'question': q.question,
+        'choices': list(q.choices) if isinstance(q.choices, list) else [],
         'correct_answer': q.correct_answer,
-        'explanation': sanitize_formula_cell(q.explanation),
-        'source': sanitize_formula_cell(q.source),
-        'tags': sanitize_formula_cell(
-            ','.join([t.name for t in q.tags.all()]),
-        ),
+        'explanation': q.explanation,
+        'source': q.source,
+        # Preserve the long-standing comma-separated field for existing API
+        # consumers, while ``tag_names`` provides a lossless representation
+        # for names that contain commas.
+        'tags': ','.join(tag_names),
+        'tag_names': tag_names,
         'difficulty': q.difficulty,
         'category_id': q.category_id,
+        'category_uuid': str(q.category.uuid) if q.category_id else None,
+        'category_name': q.category.name if q.category_id else None,
         'verified': q.verified,
-        'verified_by': sanitize_formula_cell(q.verified_by),
+        'verified_by': q.verified_by,
         'verified_at': q.verified_at.isoformat() if q.verified_at else None,
-        'verification_notes': sanitize_formula_cell(q.verification_notes),
-        'authored_by': sanitize_formula_cell(
-            q.authored_by.username if q.authored_by_id else None,
-        ),
+        'verification_notes': q.verification_notes,
+        'authored_by': q.authored_by.username if q.authored_by_id else None,
         'authored_by_id': q.authored_by_id,
         'authored_by_uuid': (
             str(q.authored_by.uuid) if q.authored_by_id else None
         ),
-        'owned_by': sanitize_formula_cell(
-            q.owned_by.username if q.owned_by_id else None,
-        ),
+        'owned_by': q.owned_by.username if q.owned_by_id else None,
         'owned_by_id': q.owned_by_id,
         'owned_by_uuid': (
             str(q.owned_by.uuid) if q.owned_by_id else None
         ),
         'created_at': q.created_at.isoformat() if q.created_at else None,
         'updated_at': q.updated_at.isoformat() if q.updated_at else None,
-        'updated_by': sanitize_formula_cell(q.updated_by),
+        'updated_by': q.updated_by,
         'times_answered': q.times_answered,
         'times_correct': q.times_correct,
         'case': (
@@ -184,7 +193,7 @@ def _row_for_json(q):
                 'uuid': str(q.case.uuid),
                 'key': q.case.key,
                 'title': q.case.title,
-                'stem': sanitize_formula_cell(q.case.stem),
+                'stem': q.case.stem,
             }
             if q.case_id
             else None
@@ -197,6 +206,7 @@ def _row_for_json(q):
 
 def export_questions(
     fmt='excel', verified_only=False, filters=None, title=None, theme=None,
+    locale='ar', front_matter=None,
 ):
     """
     Export the filtered question bank as XLSX, CSV, JSON, or PDF.
@@ -234,6 +244,8 @@ def export_questions(
             filters=filters,
             title=title,
             theme=theme,
+            locale=locale,
+            front_matter=front_matter,
         )
 
     export_dir = Path(settings.EXPORT_FOLDER)

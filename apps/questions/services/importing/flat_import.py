@@ -6,14 +6,15 @@ Each row carries the question text, a `choice_1..choice_N` set of
 columns (or, for JSON, a `choices` list), a correct_answer index, and
 optional metadata (category, tags, difficulty, case_group/case_stem).
 
-This module is the original `ImportService.import_file` and its
-private helpers, unchanged except for the mechanical move from
-class-static to module-level functions.
+This module owns the portable flat-file import contract. It accepts the
+legacy columns as well as the stable UUID/name and lossless tag fields emitted
+by the current exporter.
 """
 
 import hashlib
 import json
 import logging
+import uuid as uuid_module
 from pathlib import Path
 
 import pandas as pd
@@ -27,7 +28,9 @@ from ...models import (
     Tag,
     ClinicalCase,
     clean_tag_name,
+    CATEGORY_NAME_MAX_LENGTH,
     QUESTION_TEXT_MAX_LENGTH,
+    EXPLANATION_TEXT_MAX_LENGTH,
     CHOICE_TEXT_MAX_LENGTH,
     CASE_STEM_MAX_LENGTH,
     CASE_GROUP_MAX_LENGTH,
@@ -56,27 +59,50 @@ def _resolve_category(row):
     """
     Resolve a row's category reference to a Category.id, or None.
 
-    Prefers an explicit `category_id`; falls back to a `category` or
-    `category_name` lookup. A miss is not an error — the question is
-    imported with category=None, which is a legal state.
+    Prefers a portable UUID, then a category name, and finally accepts a local
+    integer id when it actually exists. A miss is not an error — the question
+    is imported with category=None, which is a legal state.
     """
+    category_name = (
+        _cell_to_str(row.get('category_name')).strip()
+        or _cell_to_str(row.get('category')).strip()
+    )
+    if len(category_name) > CATEGORY_NAME_MAX_LENGTH:
+        raise ValueError(
+            f'اسم التصنيف يتجاوز الحد الأقصى ({CATEGORY_NAME_MAX_LENGTH} حرفاً)'
+        )
+    category_uuid_raw = _cell_to_str(row.get('category_uuid')).strip()
+    if category_uuid_raw:
+        try:
+            category_uuid = uuid_module.UUID(category_uuid_raw)
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError('uuid التصنيف غير صالح')
+        category = Category.objects.filter(uuid=category_uuid).first()
+        if category is not None:
+            return category.id
+        if category_name:
+            category = Category.objects.filter(name=category_name).first()
+            if category is None:
+                category = Category.objects.create(
+                    uuid=category_uuid,
+                    name=category_name,
+                )
+            return category.id
+
+    if category_name:
+        category = Category.objects.filter(name=category_name).first()
+        if category is not None:
+            return category.id
+
     category_id_raw = _cell_to_str(row.get('category_id')).strip()
     if category_id_raw:
         try:
-            return int(category_id_raw)
+            numeric_id = float(category_id_raw)
+            category_id = int(numeric_id) if numeric_id.is_integer() else None
         except (ValueError, TypeError):
-            pass
-
-    category_name = (
-        _cell_to_str(row.get('category')).strip()
-        or _cell_to_str(row.get('category_name')).strip()
-    )
-    if category_name:
-        try:
-            category = Category.objects.get(name=category_name)
-            return category.id
-        except Category.DoesNotExist:
-            pass
+            category_id = None
+        if category_id is not None and Category.objects.filter(id=category_id).exists():
+            return category_id
 
     return None
 
@@ -93,11 +119,15 @@ def _extract_choices(row):
          layout).
     """
     if 'choices' in row and isinstance(row['choices'], list):
+        if any(not isinstance(choice, str) for choice in row['choices']):
+            raise ValueError('يجب أن تكون جميع الاختيارات نصوصاً')
         return row['choices']
     if 'choices' in row and isinstance(row['choices'], str):
         try:
             parsed = json.loads(row['choices'])
             if isinstance(parsed, list):
+                if any(not isinstance(choice, str) for choice in parsed):
+                    raise ValueError('يجب أن تكون جميع الاختيارات نصوصاً')
                 return parsed
         except json.JSONDecodeError:
             pass
@@ -121,12 +151,17 @@ def _resolve_case_from_row(row, author=None):
     from the stem text so the same stem always resolves to the same
     case across imports.
     """
+    nested = row.get('case') if isinstance(row.get('case'), dict) else {}
     case_key = (
         _cell_to_str(row.get('case_key')).strip()
         or _cell_to_str(row.get('case_group')).strip()
+        or _cell_to_str(nested.get('key')).strip()
     )[:CASE_GROUP_MAX_LENGTH]
 
-    case_stem = _cell_to_text_stem(row)
+    case_stem = (
+        _cell_to_text_stem(row)
+        or _cell_to_str(nested.get('stem')).strip()[:CASE_STEM_MAX_LENGTH]
+    )
 
     if not case_key and not case_stem:
         return None
@@ -135,13 +170,31 @@ def _resolve_case_from_row(row, author=None):
         digest = hashlib.sha256(case_stem.encode('utf-8')).hexdigest()[:12]
         case_key = f'auto-{digest}'
 
-    case, created = ClinicalCase.objects.get_or_create(
-        key=case_key,
-        defaults={
+    raw_uuid = _cell_to_str(row.get('case_uuid')).strip() or _cell_to_str(nested.get('uuid')).strip()
+    case_uuid = None
+    if raw_uuid:
+        try:
+            case_uuid = uuid_module.UUID(raw_uuid)
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError('uuid الحالة غير صالح')
+
+    case = ClinicalCase.objects.filter(uuid=case_uuid).first() if case_uuid else None
+    created = False
+    if case is None:
+        defaults = {
             'stem': case_stem or None,
+            'title': (
+                _cell_to_str(row.get('case_title')).strip()
+                or _cell_to_str(nested.get('title')).strip()
+            )[:200] or None,
             'authored_by': author,
-        },
-    )
+        }
+        if case_uuid:
+            defaults['uuid'] = case_uuid
+        case, created = ClinicalCase.objects.get_or_create(
+            key=case_key,
+            defaults=defaults,
+        )
 
     if not created and case_stem and not case.stem:
         case.stem = case_stem
@@ -153,6 +206,57 @@ def _resolve_case_from_row(row, author=None):
 def _cell_to_text_stem(row):
     """Extract and clamp the row's case_stem field."""
     return _cell_to_str(row.get('case_stem')).strip()[:CASE_STEM_MAX_LENGTH]
+
+
+def _parse_optional_positive_int(value):
+    text = _cell_to_str(value).strip()
+    if not text:
+        return None
+    try:
+        numeric = float(text)
+        parsed = int(numeric) if numeric.is_integer() else None
+    except (TypeError, ValueError, OverflowError):
+        parsed = None
+    if parsed is None or parsed < 1:
+        raise ValueError('ترتيب السؤال في الحالة غير صالح')
+    return parsed
+
+
+def _extract_tags(row):
+    """Read lossless tag arrays/JSON before the legacy comma column."""
+    for key in ('tags', 'tag_names'):
+        value = row.get(key)
+        if isinstance(value, list):
+            if any(not isinstance(tag, str) for tag in value):
+                raise ValueError('يجب أن تكون جميع الوسوم نصوصاً')
+            return [clean_tag_name(str(tag)) for tag in value if str(tag).strip()]
+
+    raw_json = _cell_to_str(row.get('tags_json')).strip()
+    if raw_json:
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            if any(not isinstance(tag, str) for tag in parsed):
+                raise ValueError('يجب أن تكون جميع الوسوم نصوصاً')
+            return [clean_tag_name(str(tag)) for tag in parsed if str(tag).strip()]
+
+    return [
+        clean_tag_name(tag)
+        for tag in _cell_to_str(row.get('tags', '')).split(',')
+        if tag.strip()
+    ]
+
+
+def _portable_question_uuid(row):
+    raw = _cell_to_str(row.get('uuid')).strip()
+    if not raw:
+        return None
+    try:
+        return uuid_module.UUID(raw)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError('uuid السؤال غير صالح')
 
 
 # ── Question construction ──────────────────────────────────────────────
@@ -196,7 +300,7 @@ def _build_question(row, username, author=None, owner=None):
     if author is None:
         author = owner
 
-    q_text = str(row.get('question', '')).strip()
+    q_text = _cell_to_str(row.get('question', '')).strip()
     if not q_text:
         raise ValueError('نص السؤال لا يمكن أن يكون فارغاً')
 
@@ -221,8 +325,13 @@ def _build_question(row, username, author=None, owner=None):
     # Step 2 — parse the correct-answer cell.
     raw_correct = row.get('correct_answer', 1)
     try:
-        correct = int(raw_correct)
-    except (TypeError, ValueError):
+        if isinstance(raw_correct, bool):
+            raise ValueError
+        numeric_correct = float(raw_correct)
+        if not numeric_correct.is_integer():
+            raise ValueError
+        correct = int(numeric_correct)
+    except (TypeError, ValueError, OverflowError):
         raise ValueError('رقم الإجابة الصحيحة غير صالح')
 
     # Step 3 — range check via the shared helper.
@@ -230,19 +339,21 @@ def _build_question(row, username, author=None, owner=None):
     if range_error is not None:
         raise ValueError(range_error['message'])
 
-    tags = [
-        clean_tag_name(t)
-        for t in _cell_to_str(row.get('tags', '')).split(',')
-        if t.strip()
-    ]
+    tags = _extract_tags(row)
 
     case = _resolve_case_from_row(row, author=author)
 
-    question = Question(
+    explanation = _cell_to_str(row.get('explanation'))
+    if len(explanation) > EXPLANATION_TEXT_MAX_LENGTH:
+        raise ValueError(
+            f'الشرح يتجاوز الحد الأقصى ({EXPLANATION_TEXT_MAX_LENGTH} حرفاً)'
+        )
+
+    question_kwargs = dict(
         question=q_text,
         choices=cleaned_choices,
         correct_answer=correct,
-        explanation=_cell_to_str(row.get('explanation')),
+        explanation=explanation,
         source=_cell_to_str(row.get('source'))[:200],
         difficulty=parse_difficulty(row.get('difficulty', 'medium')),
         category_id=_resolve_category(row),
@@ -250,7 +361,12 @@ def _build_question(row, username, author=None, owner=None):
         owned_by=owner,
         verified=False,
         case=case,
+        case_order=_parse_optional_positive_int(row.get('case_order')),
     )
+    portable_uuid = _portable_question_uuid(row)
+    if portable_uuid is not None:
+        question_kwargs['uuid'] = portable_uuid
+    question = Question(**question_kwargs)
     return question, tags
 
 
@@ -270,17 +386,21 @@ def _persist_records(records, username, author=None, owner=None):
         author = owner
 
     count = 0
+    skipped = 0
     with transaction.atomic():
         for row in records:
             question, tags = _build_question(
                 row, username, author=author, owner=owner,
             )
+            if Question.objects.filter(uuid=question.uuid).exists():
+                skipped += 1
+                continue
             question.save()
             for tag_name in tags:
                 tag, _ = Tag.objects.get_or_create(name=tag_name)
                 question.tags.add(tag)
             count += 1
-    return count
+    return count, skipped
 
 
 # ── Public entry point ─────────────────────────────────────────────────
@@ -317,23 +437,32 @@ def import_file(file, username):
     filepath = stage_upload(file, Path(file.name).suffix)
 
     try:
-        if ext == 'xlsx':
-            df = pd.read_excel(filepath, engine='openpyxl')
-        elif ext == 'xls':
-            df = pd.read_excel(filepath, engine='xlrd')
-        elif ext == 'csv':
-            df = pd.read_csv(filepath, encoding='utf-8-sig')
-        elif ext == 'json':
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if isinstance(data, list) and len(data) > MAX_JSON_IMPORT_ELEMENTS:
-                return {
-                    'error': f'ملف JSON كبير جداً. الحد الأقصى {MAX_JSON_IMPORT_ELEMENTS} عنصر.',
-                    'code': 400,
-                }
-            df = pd.DataFrame(data if isinstance(data, list) else [data])
-        else:
-            return {'error': 'صيغة الملف غير مدعومة', 'code': 400}
+        try:
+            if ext == 'xlsx':
+                df = pd.read_excel(filepath, engine='openpyxl')
+            elif ext == 'xls':
+                df = pd.read_excel(filepath, engine='xlrd')
+            elif ext == 'csv':
+                df = pd.read_csv(filepath, encoding='utf-8-sig')
+            elif ext == 'json':
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if not isinstance(data, (list, dict)):
+                    return {'error': 'يجب أن يحتوي ملف JSON على كائن أو قائمة كائنات', 'code': 400}
+                items = data if isinstance(data, list) else [data]
+                if len(items) > MAX_JSON_IMPORT_ELEMENTS:
+                    return {
+                        'error': f'ملف JSON كبير جداً. الحد الأقصى {MAX_JSON_IMPORT_ELEMENTS} عنصر.',
+                        'code': 400,
+                    }
+                if any(not isinstance(item, dict) for item in items):
+                    return {'error': 'يجب أن تكون عناصر JSON كائنات', 'code': 400}
+                df = pd.DataFrame(items)
+            else:
+                return {'error': 'صيغة الملف غير مدعومة', 'code': 400}
+        except Exception as exc:
+            logger.warning('Unable to parse import file %r: %s', file.name, exc)
+            return {'error': 'تعذر قراءة الملف أو أن تنسيقه غير صالح', 'code': 400}
 
         if ext == 'json':
             if 'choices' not in df.columns:
@@ -351,14 +480,25 @@ def import_file(file, username):
 
         records = df.to_dict(orient='records')
         if len(records) > settings.MAX_IMPORT_QUESTIONS:
-            records = records[:settings.MAX_IMPORT_QUESTIONS]
+            return {
+                'error': (
+                    f'عدد الأسئلة ({len(records)}) يتجاوز '
+                    f'الحد ({settings.MAX_IMPORT_QUESTIONS}). '
+                    'قسّم الملف بدلاً من استيراد جزء منه بصمت.'
+                ),
+                'code': 400,
+            }
 
-        count = _persist_records(
+        count, skipped = _persist_records(
             records, username, author=user, owner=user,
         )
 
         user.update_trust_score()
-        return {'message': f'تم استيراد {count} سؤال بنجاح'}
+        return {
+            'message': f'تم استيراد {count} سؤال بنجاح',
+            'imported': count,
+            'skipped': skipped,
+        }
 
     except ValueError as ve:
         return {'error': str(ve), 'code': 400}

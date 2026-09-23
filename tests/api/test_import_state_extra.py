@@ -64,6 +64,34 @@ def _upload(payload):
     )
 
 
+def _question_entry(**overrides):
+    entry = {
+        'uuid': str(uuid_mod.uuid4()),
+        'question': 'Valid question?',
+        'choices': ['A', 'B'],
+        'correct_answer': 1,
+        'explanation': '',
+        'source': '',
+        'difficulty': 'medium',
+        'category_uuid': None,
+        'tags': [],
+        'case_uuid': None,
+        'case_order': None,
+        'is_draft': False,
+        'verified': False,
+        'verified_by': None,
+        'verified_at': None,
+        'verification_notes': None,
+        'authored_by_uuid': None,
+        'authored_by_name': None,
+        'owned_by_uuid': None,
+        'owned_by_name': None,
+        'image': None,
+    }
+    entry.update(overrides)
+    return entry
+
+
 _MIME_PATCH_TARGET = (
     'apps.questions.services.importing.state_import.entrypoint.verify_upload_mime'
 )
@@ -204,3 +232,36 @@ class ImportStateExtraTests(CacheClearingTestCase):
         ):
             resp = self._post({'file': _upload(_envelope())})
         self.assertEqual(resp.status_code, 500)
+
+    def test_missing_required_section_returns_400(self):
+        payload = _envelope()
+        del payload['questions']
+        resp = self._post({'file': _upload(payload)})
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('questions', resp.json()['message'])
+
+    def test_malformed_question_field_returns_400_not_500(self):
+        entry = _question_entry(source=['not', 'text'])
+        resp = self._post({'file': _upload(_envelope([entry]))})
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('source', resp.json()['message'])
+
+    def test_duplicate_entity_uuid_returns_400(self):
+        duplicate = str(uuid_mod.uuid4())
+        payload = _envelope([
+            _question_entry(uuid=duplicate, question='First?'),
+            _question_entry(uuid=duplicate, question='Second?'),
+        ])
+        resp = self._post({'file': _upload(payload)})
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('مكرر', resp.json()['message'])
+
+    def test_missing_reference_returns_400_instead_of_dropping_it(self):
+        entry = _question_entry(category_uuid=str(uuid_mod.uuid4()))
+        resp = self._post({'file': _upload(_envelope([entry]))})
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('غير موجود', resp.json()['message'])

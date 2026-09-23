@@ -84,23 +84,41 @@ from apps.core.fonts import resolve_arabic_font_path
 from apps.core.utils import parse_csv_param
 from apps.questions.colors import is_valid_hex_color
 from ...models import Question
+from .image_export import read_image_as_base64
 
 logger = logging.getLogger(__name__)
 
 
 _VALID_DIFFICULTIES = tuple(value for value, _ in Question.DIFFICULTY_CHOICES)
 
-_DIFFICULTY_LABELS_AR = {
-    'easy': 'سهل',
-    'medium': 'متوسط',
-    'hard': 'صعب',
+_PDF_COPY = {
+    'ar': {
+        'direction': 'rtl', 'text_align': 'right',
+        'default_title': 'بنك الأسئلة',
+        'verified_suffix': '— الأسئلة المدققة فقط',
+        'difficulty': {'easy': 'سهل', 'medium': 'متوسط', 'hard': 'صعب'},
+        'exported_at': 'تم التصدير في', 'question_count': 'عدد الأسئلة',
+        'filters': 'الفلاتر المطبقة', 'search': 'بحث',
+        'difficulty_label': 'الصعوبة', 'category': 'التصنيف',
+        'tag': 'الوسم', 'tags': 'الوسوم',
+        'clinical_case': 'حالة سريرية', 'explanation': 'الشرح',
+        'source': 'المصدر', 'about_title': 'من نحن',
+        'question_image_alt': 'صورة السؤال', 'brand': 'مُختبِر',
+    },
+    'en': {
+        'direction': 'ltr', 'text_align': 'left',
+        'default_title': 'Question Bank',
+        'verified_suffix': '— Verified questions only',
+        'difficulty': {'easy': 'Easy', 'medium': 'Medium', 'hard': 'Hard'},
+        'exported_at': 'Exported at', 'question_count': 'Questions',
+        'filters': 'Applied filters', 'search': 'Search',
+        'difficulty_label': 'Difficulty', 'category': 'Category',
+        'tag': 'Tag', 'tags': 'Tags', 'clinical_case': 'Clinical case',
+        'explanation': 'Explanation', 'source': 'Source',
+        'about_title': 'About Us', 'question_image_alt': 'Question image',
+        'brand': 'Mukhtabir',
+    },
 }
-
-# Default document title when no custom title is supplied. Matches
-# the Arabic UI language of the PDF template. Localizing this to the
-# reader's active locale is a separate feature — see the module
-# docstring for why the PDF is Arabic-only today.
-_DEFAULT_TITLE = 'بنك الأسئلة'
 
 # Fallback when a Category row has an empty `color` field.
 _DEFAULT_CATEGORY_COLOR = '#c47d3a'
@@ -205,6 +223,11 @@ def _normalize_pdf_theme(raw):
     return value if value in _PDF_THEME_TOKENS else _DEFAULT_PDF_THEME
 
 
+def _normalize_pdf_locale(raw):
+    value = str(raw or 'ar').strip().lower().split('-', 1)[0]
+    return value if value in _PDF_COPY else 'ar'
+
+
 def _mix_hex(foreground, background, weight):
     """Mix two six-digit hex colours; ``weight`` is the foreground share."""
     foreground = foreground.lstrip('#')
@@ -293,7 +316,7 @@ def _split_csv(raw):
     return parse_csv_param(raw)
 
 
-def _build_filters_summary(filters):
+def _build_filters_summary(filters, locale='ar'):
     """
     Human-readable descriptions of the active filters, for the PDF
     header. Empty list when no filters are active.
@@ -303,11 +326,12 @@ def _build_filters_summary(filters):
 
     from ...models import Category, Tag
 
+    copy = _PDF_COPY[_normalize_pdf_locale(locale)]
     parts = []
 
     search = (filters.get('search') or '').strip()
     if len(search) >= 2:
-        parts.append(f'بحث: «{search}»')
+        parts.append(f'{copy["search"]}: «{search}»')
 
     raw_difficulties = _split_csv(filters.get('difficulty'))
     valid = [
@@ -315,8 +339,8 @@ def _build_filters_summary(filters):
         if d.lower() in _VALID_DIFFICULTIES
     ]
     if valid:
-        labels = [_DIFFICULTY_LABELS_AR.get(d, d) for d in valid]
-        parts.append(f'الصعوبة: {"، ".join(labels)}')
+        difficulty_labels = [copy['difficulty'].get(d, d) for d in valid]
+        parts.append(f'{copy["difficulty_label"]}: {", ".join(difficulty_labels)}')
 
     cat_ids_raw = _split_csv(filters.get('category_ids'))
     ids = []
@@ -335,11 +359,11 @@ def _build_filters_summary(filters):
             .values_list('name', flat=True)
         )
         if names:
-            parts.append(f'التصنيف: {"، ".join(names)}')
+            parts.append(f'{copy["category"]}: {", ".join(names)}')
 
     raw_tag = (filters.get('tag') or '').strip()
     if raw_tag and Tag.objects.filter(name=raw_tag).exists():
-        parts.append(f'الوسم: {raw_tag}')
+        parts.append(f'{copy["tag"]}: {raw_tag}')
 
     tag_names = _split_csv(filters.get('tags_filter'))
     if tag_names:
@@ -350,7 +374,7 @@ def _build_filters_summary(filters):
             .values_list('name', flat=True)
         )
         if existing:
-            parts.append(f'الوسوم: {"، ".join(existing)}')
+            parts.append(f'{copy["tags"]}: {", ".join(existing)}')
 
     return parts
 
@@ -386,7 +410,7 @@ def _build_category_color_css(questions):
     return '\n'.join(lines)
 
 
-def _resolve_doc_title(title, verified_only):
+def _resolve_doc_title(title, verified_only, locale='ar'):
     """
     Resolve the final title string for the PDF header banner.
 
@@ -408,10 +432,48 @@ def _resolve_doc_title(title, verified_only):
             resolved = resolved[: _MAX_TITLE_LENGTH - 1].rstrip() + '…'
         return resolved
 
-    resolved = _DEFAULT_TITLE
+    copy = _PDF_COPY[_normalize_pdf_locale(locale)]
+    resolved = copy['default_title']
     if verified_only:
-        resolved += ' — الأسئلة المدققة فقط'
+        resolved += f" {copy['verified_suffix']}"
     return resolved
+
+
+def _normalize_front_matter(front_matter, locale):
+    """Return bounded structured front matter, or None when disabled."""
+    if not isinstance(front_matter, dict) or not front_matter.get('enabled'):
+        return None
+
+    copy = _PDF_COPY[locale]
+    fields = []
+    for item in (front_matter.get('fields') or [])[:10]:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get('label') or '').strip()[:60]
+        value = str(item.get('value') or '').strip()[:500]
+        if label and value:
+            fields.append({'label': label, 'value': value})
+
+    return {
+        'heading': (
+            str(front_matter.get('heading') or '').strip()[:150]
+            or copy['about_title']
+        ),
+        'body': str(front_matter.get('body') or '').strip()[:3000],
+        'fields': fields,
+    }
+
+
+def _attach_pdf_image_uri(question):
+    """Attach an in-memory data URI without exposing storage URLs."""
+    question.pdf_image_uri = None
+    if not getattr(question, 'image', None):
+        return
+    block = read_image_as_base64(question.image)
+    if block and str(block.get('mime') or '').startswith('image/'):
+        question.pdf_image_uri = (
+            f"data:{block['mime']};base64,{block['data_base64']}"
+        )
 
 
 def export_questions_pdf(
@@ -421,6 +483,8 @@ def export_questions_pdf(
     filters=None,
     title=None,
     theme=None,
+    locale='ar',
+    front_matter=None,
 ):
     """
     Render the given question list as a PDF.
@@ -450,11 +514,15 @@ def export_questions_pdf(
     if not questions:
         return {'error': 'لا توجد بيانات للتصدير', 'code': 404}
 
-    # Attach the Arabic difficulty label as a transient attribute.
+    locale = _normalize_pdf_locale(locale)
+    copy = _PDF_COPY[locale]
+
+    # Attach presentation-only attributes. They are never persisted.
     for q in questions:
-        q.difficulty_label = _DIFFICULTY_LABELS_AR.get(
+        q.difficulty_label = copy['difficulty'].get(
             q.difficulty, q.difficulty,
         )
+        _attach_pdf_image_uri(q)
 
     font_path = resolve_arabic_font_path()
     font_uri = font_path.as_uri() if font_path else None
@@ -464,10 +532,11 @@ def export_questions_pdf(
             'BASE_DIR/static/fonts — PDF will use a system fallback font.'
         )
 
-    filters_summary = _build_filters_summary(filters)
+    filters_summary = _build_filters_summary(filters, locale)
     category_color_css = _build_category_color_css(questions)
-    doc_title = _resolve_doc_title(title, verified_only)
+    doc_title = _resolve_doc_title(title, verified_only, locale)
     palette = _build_pdf_palette(theme)
+    normalized_front_matter = _normalize_front_matter(front_matter, locale)
 
     html_string = render_to_string(
         'exports/questions_pdf.html',
@@ -478,6 +547,10 @@ def export_questions_pdf(
             'filters_summary': filters_summary,
             'doc_title': doc_title,
             'pdf_theme': palette['name'],
+            'locale': locale,
+            'direction': copy['direction'],
+            'labels': copy,
+            'front_matter': normalized_front_matter,
         },
     )
 
@@ -519,7 +592,7 @@ def export_questions_pdf(
                 font-family: 'Noto Arabic', sans-serif;
             }}
             @bottom-right {{
-                content: 'مُختبِر';
+                content: '{copy['brand']}';
                 font-size: 8pt;
                 color: {palette['text_muted']};
                 font-family: 'Noto Arabic', sans-serif;
@@ -528,14 +601,69 @@ def export_questions_pdf(
 
         html, body {{
             font-family: 'Noto Arabic', sans-serif;
-            direction: rtl;
-            text-align: right;
+            direction: {copy['direction']};
+            text-align: {copy['text_align']};
             font-size: 10.5pt;
             line-height: 1.7;
             color: {palette['text_primary']};
             background: {palette['bg_body']};
             margin: 0;
             padding: 0;
+        }}
+
+        /* ── Optional front matter ───────────────────────────── */
+        .about-page {{
+            min-height: 22.8cm;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 1.4cm;
+            background: {palette['bg_card']};
+            border: 1px solid {palette['border']};
+            border-block-start: 8px solid {palette['primary']};
+            border-radius: 8px;
+            break-after: page;
+            page-break-after: always;
+        }}
+
+        .about-page h1 {{
+            color: {palette['primary']};
+            font-size: 24pt;
+            line-height: 1.3;
+            margin: 0 0 0.7em 0;
+        }}
+
+        .about-page__body {{
+            color: {palette['text_secondary']};
+            font-size: 12pt;
+            line-height: 1.9;
+            margin: 0 0 1.2em 0;
+            white-space: pre-wrap;
+        }}
+
+        .about-page__fields {{
+            margin: 0;
+            padding: 0;
+        }}
+
+        .about-page__field {{
+            display: flex;
+            gap: 0.8em;
+            padding: 0.55em 0;
+            border-bottom: 1px solid {palette['border']};
+        }}
+
+        .about-page__field dt {{
+            min-width: 28%;
+            color: {palette['text_muted']};
+            font-weight: 600;
+        }}
+
+        .about-page__field dd {{
+            margin: 0;
+            color: {palette['text_primary']};
+            white-space: pre-wrap;
         }}
 
         /* ── Document header banner ──────────────────────────── */
@@ -682,6 +810,16 @@ def export_questions_pdf(
             margin: 0 0 0.7em 0;
         }}
 
+        .q-image {{
+            display: block;
+            max-width: 100%;
+            max-height: 10cm;
+            object-fit: contain;
+            margin: 0.25em auto 0.75em auto;
+            border: 1px solid {palette['border']};
+            border-radius: 4px;
+        }}
+
         /* ── Case stem panel ─────────────────────────────────── */
         .case-stem {{
             background: {palette['soft_info']};
@@ -821,6 +959,11 @@ def export_questions_pdf(
         HTML(string=html_string).write_pdf(
             str(filepath),
             stylesheets=[stylesheet],
+            pdf_variant='pdf/a-3u',
+            pdf_tags=True,
+            srgb=True,
+            custom_metadata=True,
+            optimize_images=True,
         )
     except Exception as e:
         logger.exception('Failed to render question-bank PDF: %s', e)

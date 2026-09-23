@@ -10,14 +10,18 @@ rules are what these tests exercise.
 import csv
 import io
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 
-from apps.questions.models import Question, Tag, ClinicalCase
-from apps.questions.services import ImportService
+from apps.questions.models import Question
+from apps.questions.services import ImportService, ExportService
 from tests.base import CacheClearingTestCase
-from tests.factories import make_user, make_category
+from tests.factories import (
+    make_user, make_category, make_tag, make_case, make_question,
+)
 
 
 _MIME_PATCH_TARGET = (
@@ -153,6 +157,13 @@ class FlatImportCSVTests(CacheClearingTestCase):
         )
         self.assertEqual(result.get('code'), 400)
 
+    def test_fractional_correct_answer_is_rejected_not_truncated(self):
+        result = ImportService.import_file(
+            _csv_upload([self._row(correct_answer='1.5')]), 'alice',
+        )
+        self.assertEqual(result.get('code'), 400)
+        self.assertEqual(Question.objects.count(), 0)
+
     def test_duplicate_choices_rejected(self):
         row = {
             'question': 'Duplicate?',
@@ -187,6 +198,38 @@ class FlatImportCSVTests(CacheClearingTestCase):
     def test_unknown_user_rejected(self):
         result = ImportService.import_file(_csv_upload([self._row()]), 'ghost')
         self.assertEqual(result.get('code'), 404)
+
+    def test_tags_json_preserves_names_containing_commas(self):
+        result = ImportService.import_file(
+            _csv_upload([self._row(
+                tags='renal, acute,priority',
+                tags_json=json.dumps(['renal, acute', 'priority']),
+            )]),
+            'alice',
+        )
+        self.assertNotIn('error', result)
+        names = set(Question.objects.get().tags.values_list('name', flat=True))
+        self.assertEqual(names, {'renal, acute', 'priority'})
+
+    def test_decimal_category_id_is_not_truncated_to_an_integer(self):
+        make_category('Should not match', id=1)
+        result = ImportService.import_file(
+            _csv_upload([self._row(category_id='1.5')]), 'alice',
+        )
+        self.assertNotIn('error', result)
+        self.assertIsNone(Question.objects.get().category)
+
+    @override_settings(MAX_IMPORT_QUESTIONS=1)
+    def test_row_limit_rejects_whole_file_instead_of_silent_truncation(self):
+        result = ImportService.import_file(
+            _csv_upload([
+                self._row(question='First?'),
+                self._row(question='Second?'),
+            ]),
+            'alice',
+        )
+        self.assertEqual(result.get('code'), 400)
+        self.assertEqual(Question.objects.count(), 0)
 
 
 class FlatImportJSONTests(CacheClearingTestCase):
@@ -223,9 +266,102 @@ class FlatImportJSONTests(CacheClearingTestCase):
         )
         self.assertEqual(result.get('code'), 400)
 
+    def test_non_object_json_is_rejected_as_a_client_error(self):
+        result = ImportService.import_file(_json_upload('not an object'), 'alice')
+        self.assertEqual(result.get('code'), 400)
+
+    def test_non_text_choices_are_rejected_as_a_client_error(self):
+        result = ImportService.import_file(
+            _json_upload([self._entry(choices=[1, 2])]), 'alice',
+        )
+        self.assertEqual(result.get('code'), 400)
+        self.assertEqual(Question.objects.count(), 0)
+
     def test_oversized_array_rejected(self):
         # MAX_JSON_IMPORT_ELEMENTS is 10,000.
         payload = [self._entry() for _ in range(10_001)]
         result = ImportService.import_file(_json_upload(payload), 'alice')
         self.assertEqual(result.get('code'), 400)
         self.assertIn('الحد الأقصى', result['error'])
+
+    def test_nested_case_and_case_order_are_imported(self):
+        case_uuid = '596533ed-1c1b-4c43-aef1-b831b0a22d69'
+        result = ImportService.import_file(
+            _json_upload([self._entry(
+                case={
+                    'uuid': case_uuid,
+                    'key': 'portable-case',
+                    'title': 'Portable title',
+                    'stem': 'Portable stem',
+                },
+                case_order=3,
+            )]),
+            'alice',
+        )
+        self.assertNotIn('error', result)
+        question = Question.objects.select_related('case').get()
+        self.assertEqual(str(question.case.uuid), case_uuid)
+        self.assertEqual(question.case.key, 'portable-case')
+        self.assertEqual(question.case.title, 'Portable title')
+        self.assertEqual(question.case_order, 3)
+
+    def test_uuid_import_is_idempotent(self):
+        entry = self._entry(uuid='498b88e6-7bdd-4d96-b95f-782906f52f0d')
+        first = ImportService.import_file(_json_upload([entry]), 'alice')
+        second = ImportService.import_file(_json_upload([entry]), 'alice')
+
+        self.assertEqual(first['imported'], 1)
+        self.assertEqual(second['imported'], 0)
+        self.assertEqual(second['skipped'], 1)
+        self.assertEqual(Question.objects.count(), 1)
+
+    def test_json_export_can_round_trip_portable_fields(self):
+        owner = make_user('roundtrip_owner')
+        category = make_category('Portable category')
+        case = make_case(
+            'portable-case', title='Case title', stem='Case stem',
+            authored_by=owner,
+        )
+        tag = make_tag('renal, acute')
+        original = make_question(
+            owner=owner,
+            uuid='b14d327d-6958-4dd8-b0db-60a2e6c1e576',
+            question='=Preserve this text',
+            choices=['+First', '-Second'],
+            correct_answer=2,
+            category=category,
+            case=case,
+            case_order=4,
+        )
+        original.tags.add(tag)
+        export = ExportService.export_questions(fmt='json')
+        raw = Path(export['filepath']).read_bytes()
+
+        category_uuid = str(category.uuid)
+        case_uuid = str(case.uuid)
+
+        original.delete()
+        category.delete()
+        case.delete()
+        tag.delete()
+        result = ImportService.import_file(
+            SimpleUploadedFile(
+                'roundtrip.json', raw, content_type='application/json',
+            ),
+            'alice',
+        )
+
+        self.assertNotIn('error', result)
+        imported = Question.objects.select_related('category', 'case').get()
+        self.assertEqual(str(imported.uuid), 'b14d327d-6958-4dd8-b0db-60a2e6c1e576')
+        self.assertEqual(imported.question, '=Preserve this text')
+        self.assertEqual(imported.choices, ['+First', '-Second'])
+        self.assertEqual(str(imported.category.uuid), category_uuid)
+        self.assertEqual(imported.category.name, 'Portable category')
+        self.assertEqual(str(imported.case.uuid), case_uuid)
+        self.assertEqual(imported.case.key, 'portable-case')
+        self.assertEqual(imported.case_order, 4)
+        self.assertEqual(
+            list(imported.tags.values_list('name', flat=True)),
+            ['renal, acute'],
+        )

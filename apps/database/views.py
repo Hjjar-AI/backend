@@ -1,13 +1,19 @@
 # backend/apps/database/views.py
 
 from rest_framework.views import APIView
+from rest_framework.exceptions import MethodNotAllowed
 from django.http import FileResponse
 from django.conf import settings
+import mimetypes
 import json
 import logging
 
 from .services import BackupService
-from .serializers import RestoreBackupSerializer, ClearDatabaseSerializer
+from .serializers import (
+    RestoreBackupSerializer,
+    ClearDatabaseSerializer,
+    PdfExportRequestSerializer,
+)
 from apps.core.permissions import HasCapability
 from apps.core.utils import api_success, api_error
 from apps.core.audit import log_privileged_action
@@ -23,22 +29,39 @@ from apps.questions.services import ImportService, ExportService
 logger = logging.getLogger(__name__)
 
 
-def _import_file_or_error(request):
+def _import_file_or_error(request, *, max_size=None):
     file = request.FILES.get('file')
     if not file:
         return None, api_error('لم يتم اختيار ملف', 400)
-    if file.size > settings.MAX_UPLOAD_SIZE:
+    size_limit = settings.MAX_UPLOAD_SIZE if max_size is None else max_size
+    if file.size > size_limit:
         return None, api_error(
             f'حجم الملف يتجاوز الحد الأقصى '
-            f'({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} ميجابايت)',
+            f'({size_limit // (1024 * 1024)} ميجابايت)',
             400,
         )
     return file, None
 
 
-def _export_response(result, content_type='application/octet-stream'):
+_EXPORT_CONTENT_TYPES = {
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xls': 'application/vnd.ms-excel',
+    '.csv': 'text/csv; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.pdf': 'application/pdf',
+}
+
+
+def _export_response(result, content_type=None):
     if 'error' in result:
         return api_error(result['error'], result['code'])
+    if content_type is None:
+        suffix = str(result.get('filename') or '').lower()
+        suffix = '.' + suffix.rsplit('.', 1)[-1] if '.' in suffix else ''
+        content_type = _EXPORT_CONTENT_TYPES.get(suffix)
+        if content_type is None:
+            content_type = mimetypes.guess_type(result['filename'])[0]
+        content_type = content_type or 'application/octet-stream'
     return FileResponse(
         open(result['filepath'], 'rb'),
         as_attachment=True,
@@ -123,6 +146,37 @@ def _extract_export_theme(request):
     if not raw:
         return None
     return str(raw).strip().lower()[:32] or None
+
+
+def _extract_export_locale(request):
+    """Return a supported PDF locale, preferring the request language."""
+    raw = request.query_params.get('locale')
+    if not raw:
+        raw = getattr(request, 'LANGUAGE_CODE', None)
+    value = str(raw or 'ar').strip().lower().split('-', 1)[0]
+    return value if value in {'ar', 'en'} else 'ar'
+
+
+def _post_pdf_export(request, *, verified_only):
+    serializer = PdfExportRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return api_error(
+            'خيارات تصدير PDF غير صالحة',
+            400,
+            details=serializer.errors,
+        )
+
+    data = serializer.validated_data
+    result = ExportService.export_questions(
+        fmt='pdf',
+        verified_only=verified_only,
+        filters=data.get('filters') or None,
+        title=data.get('title') or None,
+        theme=data.get('theme') or None,
+        locale=data.get('locale') or _extract_export_locale(request),
+        front_matter=data.get('front_matter') or None,
+    )
+    return _export_response(result)
 
 
 class DatabaseInfoView(APIView):
@@ -293,14 +347,22 @@ class ExportDatabaseView(APIView):
         filters = _extract_export_filters(request)
         title = _extract_export_title(request)
         theme = _extract_export_theme(request)
+        locale = _extract_export_locale(request)
         result = ExportService.export_questions(
             fmt=fmt,
             verified_only=False,
             filters=filters,
             title=title,
             theme=theme,
+            locale=locale,
         )
         return _export_response(result)
+
+    def post(self, request, fmt):
+        """Generate configurable PDFs without putting free text in a URL."""
+        if fmt != 'pdf':
+            raise MethodNotAllowed('POST')
+        return _post_pdf_export(request, verified_only=False)
 
 
 class ExportVerifiedDatabaseView(APIView):
@@ -316,14 +378,21 @@ class ExportVerifiedDatabaseView(APIView):
         filters = _extract_export_filters(request)
         title = _extract_export_title(request)
         theme = _extract_export_theme(request)
+        locale = _extract_export_locale(request)
         result = ExportService.export_questions(
             fmt=fmt,
             verified_only=True,
             filters=filters,
             title=title,
             theme=theme,
+            locale=locale,
         )
         return _export_response(result)
+
+    def post(self, request, fmt):
+        if fmt != 'pdf':
+            raise MethodNotAllowed('POST')
+        return _post_pdf_export(request, verified_only=True)
 
 
 class ExportStateView(APIView):
@@ -372,7 +441,13 @@ class ImportStateView(APIView):
     throttle_classes = [ImportRateThrottle, AdminPasswordRateThrottle]
 
     def post(self, request):
-        file, error = _import_file_or_error(request)
+        # Use the same bound as state export.  A successfully generated state
+        # artifact is therefore always accepted by this application version.
+        state_limit = min(
+            settings.MAX_STATE_TRANSFER_SIZE,
+            settings.MAX_UPLOAD_SIZE,
+        )
+        file, error = _import_file_or_error(request, max_size=state_limit)
         if error is not None:
             return error
 

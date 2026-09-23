@@ -23,25 +23,48 @@
 {# `_build_category_color_css` in pdf_export.py and appended to the   #}
 {# stylesheet. #}
 <!DOCTYPE html>
-<html lang="ar" dir="rtl" data-theme="{{ pdf_theme }}">
+<html lang="{{ locale }}" dir="{{ direction }}" data-theme="{{ pdf_theme }}">
 <head>
   <meta charset="utf-8">
   <title>{{ doc_title }}</title>
+  <meta name="author" content="{{ labels.brand }}">
+  <meta name="description" content="{{ doc_title }}">
+  <meta name="generator" content="Mukhtabir">
+  <meta name="dcterms.created" content="{{ exported_at|date:'c' }}">
 </head>
 <body>
+
+  {% if front_matter %}
+    <section class="about-page" aria-labelledby="about-heading">
+      <h1 id="about-heading">{{ front_matter.heading }}</h1>
+      {% if front_matter.body %}
+        <p class="about-page__body">{{ front_matter.body }}</p>
+      {% endif %}
+      {% if front_matter.fields %}
+        <dl class="about-page__fields">
+          {% for field in front_matter.fields %}
+            <div class="about-page__field">
+              <dt>{{ field.label }}</dt>
+              <dd>{{ field.value }}</dd>
+            </div>
+          {% endfor %}
+        </dl>
+      {% endif %}
+    </section>
+  {% endif %}
 
   <header class="doc-header">
     <h1>{{ doc_title }}</h1>
     <p class="doc-meta">
-      تم التصدير في <strong>{{ exported_at|date:"Y-m-d H:i" }}</strong>
+      {{ labels.exported_at }} <strong>{{ exported_at|date:"Y-m-d H:i" }}</strong>
       &nbsp;·&nbsp;
-      عدد الأسئلة: <strong>{{ questions|length }}</strong>
+      {{ labels.question_count }}: <strong>{{ questions|length }}</strong>
     </p>
   </header>
 
   {% if filters_summary %}
     <div class="filters-applied">
-      <strong>الفلاتر المطبقة:</strong>
+      <strong>{{ labels.filters }}:</strong>
       {{ filters_summary|join:" · " }}
     </div>
   {% endif %}
@@ -65,13 +88,17 @@
       {% if q.case and q.case.stem %}
         <div class="case-stem">
           <span class="case-stem-label">
-            حالة سريرية{% if q.case.key %} — {{ q.case.key }}{% endif %}
+            {{ labels.clinical_case }}{% if q.case.key %} — {{ q.case.key }}{% endif %}
           </span>
           {{ q.case.stem }}
         </div>
       {% endif %}
 
       <div class="q-text">{{ q.question }}</div>
+
+      {% if q.pdf_image_uri %}
+        <img class="q-image" src="{{ q.pdf_image_uri }}" alt="{{ labels.question_image_alt }}">
+      {% endif %}
 
       <ul class="q-choices">
         {% for choice in q.choices %}
@@ -92,7 +119,7 @@
 
       {% if q.explanation %}
         <div class="q-explanation">
-          <strong>الشرح:</strong>
+          <strong>{{ labels.explanation }}:</strong>
           {{ q.explanation }}
         </div>
       {% endif %}
@@ -101,13 +128,13 @@
         <footer class="q-footer">
           {% if q.source %}
             <span class="q-meta-item">
-              <span class="q-meta-label">المصدر:</span> {{ q.source }}
+              <span class="q-meta-label">{{ labels.source }}:</span> {{ q.source }}
             </span>
           {% endif %}
           {% if q.tags.all %}
             <span class="q-meta-item">
-              <span class="q-meta-label">الوسوم:</span>
-              {% for tag in q.tags.all %}{{ tag.name }}{% if not forloop.last %}، {% endif %}{% endfor %}
+              <span class="q-meta-label">{{ labels.tags }}:</span>
+              {% for tag in q.tags.all %}{{ tag.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
             </span>
           {% endif %}
         </footer>

@@ -259,6 +259,7 @@ class ExportDatabaseViewTests(CacheClearingTestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn('attachment', resp['Content-Disposition'])
         self.assertIn('.csv', resp['Content-Disposition'])
+        self.assertIn('text/csv', resp['Content-Type'])
 
     def test_verified_only_export(self):
         resp = self.client.get('/api/v1/database/export/csv/verified/')
@@ -282,6 +283,58 @@ class ExportDatabaseViewTests(CacheClearingTestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(export_questions.call_args.kwargs['theme'], 'dark')
         b''.join(resp.streaming_content)
+
+    @patch('apps.database.views.ExportService.export_questions')
+    def test_pdf_post_forwards_locale_filters_and_front_matter(self, export_questions):
+        filepath = Path(self.tmpdir) / 'custom.pdf'
+        filepath.write_bytes(b'%PDF-test')
+        export_questions.return_value = {
+            'filepath': str(filepath),
+            'filename': 'custom.pdf',
+        }
+        body = {
+            'title': 'Custom bank',
+            'locale': 'en',
+            'theme': 'dark',
+            'filters': {'difficulty': ['easy', 'hard']},
+            'front_matter': {
+                'enabled': True,
+                'heading': 'About us',
+                'body': 'Publisher details',
+                'fields': [{'label': 'Edition', 'value': '2026'}],
+            },
+        }
+
+        resp = self.client.post(
+            '/api/v1/database/export/pdf/', body, format='json',
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        kwargs = export_questions.call_args.kwargs
+        self.assertEqual(kwargs['locale'], 'en')
+        self.assertEqual(kwargs['filters']['difficulty'], 'easy,hard')
+        self.assertTrue(kwargs['front_matter']['enabled'])
+        self.assertEqual(kwargs['front_matter']['fields'][0]['label'], 'Edition')
+        b''.join(resp.streaming_content)
+
+    @patch('apps.database.views.ExportService.export_questions')
+    def test_pdf_post_rejects_more_than_ten_custom_fields(self, export_questions):
+        resp = self.client.post(
+            '/api/v1/database/export/pdf/',
+            {
+                'front_matter': {
+                    'enabled': True,
+                    'fields': [
+                        {'label': f'Field {index}', 'value': 'x'}
+                        for index in range(11)
+                    ],
+                },
+            },
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        export_questions.assert_not_called()
 
     def test_state_export_returns_json(self):
         resp = self.client.get('/api/v1/database/export/state/')

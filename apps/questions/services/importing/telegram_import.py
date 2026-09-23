@@ -110,7 +110,10 @@ def import_telegram(file, username):
             if not isinstance(poll, dict):
                 continue
 
-            q_text = (poll.get('question') or '').strip()
+            raw_question = poll.get('question')
+            if not isinstance(raw_question, str):
+                continue
+            q_text = raw_question.strip()
             if not q_text:
                 continue
 
@@ -122,13 +125,20 @@ def import_telegram(file, username):
             for ans in raw_answers:
                 if not isinstance(ans, dict):
                     continue
-                text = (ans.get('text') or '').strip()
+                raw_text = ans.get('text')
+                if not isinstance(raw_text, str):
+                    continue
+                text = raw_text.strip()
                 if not text:
                     continue
+                try:
+                    voters = int(ans.get('voters', 0))
+                except (TypeError, ValueError, OverflowError):
+                    voters = 0
                 filtered_answers.append({
                     'text': text,
                     'chosen': bool(ans.get('chosen', False)),
-                    'voters': ans.get('voters', 0),
+                    'voters': max(voters, 0),
                 })
 
             if len(filtered_answers) < 2:
@@ -152,11 +162,10 @@ def import_telegram(file, username):
                         max_votes = a['voters']
                         correct_idx = idx
 
-            explanation = (
-                _guessed_explanation()
-                if chosen_idx is None
-                else (msg.get('text') or '')
-            )
+            message_text = msg.get('text')
+            if not isinstance(message_text, str):
+                message_text = ''
+            explanation = _guessed_explanation() if chosen_idx is None else message_text
 
             questions.append({
                 'question': q_text,
@@ -170,14 +179,24 @@ def import_telegram(file, username):
             return {'error': 'لم يتم العثور على أي أسئلة في الملف', 'code': 400}
 
         if len(questions) > settings.MAX_IMPORT_QUESTIONS:
-            questions = questions[:settings.MAX_IMPORT_QUESTIONS]
+            return {
+                'error': (
+                    f'عدد الأسئلة ({len(questions)}) يتجاوز '
+                    f'الحد ({settings.MAX_IMPORT_QUESTIONS})'
+                ),
+                'code': 400,
+            }
 
-        count = _persist_records(
+        count, skipped = _persist_records(
             questions, username, author=user, owner=user,
         )
 
         user.update_trust_score()
-        return {'message': f'تم استيراد {count} سؤال من تلغرام'}
+        return {
+            'message': f'تم استيراد {count} سؤال من تلغرام',
+            'imported': count,
+            'skipped': skipped,
+        }
 
     except ValueError as ve:
         return {'error': str(ve), 'code': 400}

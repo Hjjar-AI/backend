@@ -356,6 +356,7 @@ REST_FRAMEWORK = {
 
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:5173').split(',')
 CORS_ALLOW_CREDENTIALS = True
+CORS_EXPOSE_HEADERS = ['Content-Disposition']
 
 # ── Security settings ─────────────────────────────────────────────────
 SESSION_COOKIE_HTTPONLY = True
@@ -377,6 +378,17 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 
 MAX_UPLOAD_SIZE = int(os.environ.get('MAX_UPLOAD_SIZE', 50 * 1024 * 1024))
+
+# A state envelope is the application's portable backup format and can be
+# substantially larger than an ordinary spreadsheet upload, especially when
+# images are embedded as base64.  Export and import both use these two limits:
+# the exporter refuses to publish an artifact that the importer would reject.
+MAX_STATE_TRANSFER_SIZE = int(
+    os.environ.get('MAX_STATE_TRANSFER_SIZE', MAX_UPLOAD_SIZE)
+)
+MAX_STATE_IMPORT_QUESTIONS = int(
+    os.environ.get('MAX_STATE_IMPORT_QUESTIONS', 100_000)
+)
 
 BACKUP_FOLDER = BASE_DIR / 'backups'
 EXPORT_FOLDER = BASE_DIR / 'exports'

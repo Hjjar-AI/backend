@@ -101,6 +101,18 @@ def export_state(include_images=True, verified_only=False):
     if verified_only:
         qs = qs.filter(verified=True)
 
+    question_count = qs.count()
+    question_limit = settings.MAX_STATE_IMPORT_QUESTIONS
+    if question_count > question_limit:
+        return {
+            'error': (
+                f'لا يمكن إنشاء حزمة قابلة للاستيراد: '
+                f'عدد الأسئلة ({question_count}) يتجاوز الحد '
+                f'({question_limit}).'
+            ),
+            'code': 413,
+        }
+
     used_category_ids = set()
     used_tag_ids = set()
     used_case_ids = set()
@@ -259,5 +271,23 @@ def export_state(include_images=True, verified_only=False):
 
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+
+    # Never publish a state artifact this same deployment is configured to
+    # reject on upload.  This check happens after serialization because base64
+    # image expansion cannot be estimated reliably from model metadata alone.
+    transfer_limit = min(
+        settings.MAX_STATE_TRANSFER_SIZE,
+        settings.MAX_UPLOAD_SIZE,
+    )
+    if filepath.stat().st_size > transfer_limit:
+        filepath.unlink(missing_ok=True)
+        return {
+            'error': (
+                'حجم حزمة الحالة يتجاوز حد الاستيراد. '
+                'صدّر الحزمة بدون صور أو ارفع '
+                'MAX_STATE_TRANSFER_SIZE وMAX_UPLOAD_SIZE.'
+            ),
+            'code': 413,
+        }
 
     return {'filepath': str(filepath), 'filename': filename}

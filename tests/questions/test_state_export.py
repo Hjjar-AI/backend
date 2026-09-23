@@ -2,6 +2,7 @@
 import json
 import shutil
 import tempfile
+from pathlib import Path
 
 from django.test import override_settings
 
@@ -182,3 +183,18 @@ class StateExportTests(CacheClearingTestCase):
         }
         missing = required - set(q.keys())
         self.assertEqual(missing, set(), f'missing keys: {missing}')
+
+    @override_settings(MAX_STATE_IMPORT_QUESTIONS=0)
+    def test_export_rejects_a_question_count_the_importer_cannot_accept(self):
+        make_question(owner=make_user('limit_owner'))
+        result = ExportService.export_state()
+
+        self.assertEqual(result.get('code'), 413)
+        self.assertIn('يتجاوز الحد', result['error'])
+
+    @override_settings(MAX_STATE_TRANSFER_SIZE=100)
+    def test_export_removes_artifact_larger_than_import_limit(self):
+        result = ExportService.export_state()
+
+        self.assertEqual(result.get('code'), 413)
+        self.assertEqual(list(Path(self.tmpdir).glob('questions_state*.json')), [])

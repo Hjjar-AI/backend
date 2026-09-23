@@ -8,7 +8,7 @@ from apps.questions.services.exporting.formula_sanitizer import (
     sanitize_formula_cell,
 )
 from tests.base import CacheClearingTestCase
-from tests.factories import make_user, make_question
+from tests.factories import make_user, make_question, make_tag
 
 
 class FlatExportTests(CacheClearingTestCase):
@@ -43,6 +43,32 @@ class FlatExportTests(CacheClearingTestCase):
         self.assertIsInstance(data, list)
         self.assertGreater(len(data), 0)
         self.assertIsInstance(data[0]['choices'], list)
+
+    def test_json_export_preserves_formula_prefixes_as_data(self):
+        question = make_question(
+            owner=self.author,
+            question='=A legitimate leading equals sign',
+            choices=['+Positive', '-Negative'],
+            explanation='@Handle',
+        )
+        result = ExportService.export_questions(fmt='json')
+        data = json.loads(Path(result['filepath']).read_text(encoding='utf-8'))
+        exported = next(item for item in data if item['uuid'] == str(question.uuid))
+
+        self.assertEqual(exported['question'], question.question)
+        self.assertEqual(exported['choices'], question.choices)
+        self.assertEqual(exported['explanation'], question.explanation)
+
+    def test_json_keeps_legacy_tags_and_adds_lossless_tag_names(self):
+        question = Question.objects.first()
+        question.tags.add(make_tag('renal, acute'), make_tag('priority'))
+
+        result = ExportService.export_questions(fmt='json')
+        data = json.loads(Path(result['filepath']).read_text(encoding='utf-8'))
+        exported = next(item for item in data if item['uuid'] == str(question.uuid))
+
+        self.assertIsInstance(exported['tags'], str)
+        self.assertEqual(set(exported['tag_names']), {'renal, acute', 'priority'})
 
     def test_no_questions_returns_404_error(self):
         Question.objects.all().delete()
