@@ -10,3 +10,4 @@ venv/
 /uploads/
 /staticfiles/
 .env
+/SQLite/
