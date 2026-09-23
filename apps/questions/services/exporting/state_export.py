@@ -15,6 +15,7 @@ from django.conf import settings
 from django.utils import timezone
 from apps.core.artifacts import reserve_artifact_path, download_filename
 from apps.questions.services.state_format import STATE_FORMAT, STATE_FORMAT_VERSION
+from apps.questions.services.state_workbook import write_state_workbook
 
 from ...models import Question, Category, Tag, ClinicalCase
 
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 # state_import._validate_state_envelope). No v1 data exists yet.
 
 
-def export_state(include_images=True, verified_only=False):
+def export_state(include_images=True, verified_only=False, fmt='json'):
     """
     Build the full questions-data envelope (format v2).
 
@@ -51,18 +52,20 @@ def export_state(include_images=True, verified_only=False):
       • categories — full field set, keyed by uuid.
       • tags       — name + parent uuid (nullable), keyed by uuid.
       • cases      — uuid + key + title + stem + authored_by_uuid.
-      • questions  — content fields + both author uuids and their
-                     display names + `is_draft`. Statistics and
-                     administrative state beyond the draft flag are
-                     NOT exported.
+      • questions  — complete portable question data, including
+                     content, relationships, moderation state,
+                     statistics, optimistic-lock version, and audit
+                     timestamps.
       • meta.user_map — { user_uuid: {username, full_name} } for
                      every user referenced by ANY ported entity
                      (question authored_by/owned_by, or case
                      authored_by). Informational only — the
                      importer matches by uuid, not by name.
 
+    ``fmt`` may be ``json`` (the canonical envelope) or ``xlsx`` (a
+    lossless multi-sheet container around that same envelope).
     Images are embedded as base64. `include_images=False` produces
-    a much smaller file and drops the `image` field entirely.
+    a much smaller file and writes no image data.
 
     `verified_only=True` restricts questions to those already
     verified. Categories, tags, and cases referenced by at least
@@ -77,6 +80,10 @@ def export_state(include_images=True, verified_only=False):
     backup that silently omitted drafts would let the bug that
     this field fixes recur through the export side instead.
     """
+    fmt = str(fmt or 'json').lower().strip()
+    if fmt not in {'json', 'xlsx'}:
+        return {'error': 'صيغة تصدير الحالة غير مدعومة', 'code': 400}
+
     payload = {
         'meta': {
             'format': STATE_FORMAT,
@@ -177,6 +184,12 @@ def export_state(include_images=True, verified_only=False):
             'owned_by_name': (
                 q.owned_by.username if q.owned_by_id else None
             ),
+            'updated_by': q.updated_by or None,
+            'times_answered': q.times_answered,
+            'times_correct': q.times_correct,
+            'version': q.version,
+            'created_at': q.created_at.isoformat() if q.created_at else None,
+            'updated_at': q.updated_at.isoformat() if q.updated_at else None,
             'image': image_block,
         }
         tag_list = list(q.tags.all())
@@ -221,14 +234,25 @@ def export_state(include_images=True, verified_only=False):
         })
 
     # ── Tags ──────────────────────────────────────────────────────
-    # Two-pass parent resolution: tags are collected by id, then
-    # each one carries its parent's uuid (the wire format), not
-    # its name. A parent that was not itself used by an exported
-    # question is dropped (parent_uuid=None), because importing a
-    # parent that nothing else references would create an orphan.
-    tag_by_id = {
+    # Include the complete ancestor chain for every assigned tag.
+    # A child without its unassigned parent would still import, but
+    # the hierarchy would silently flatten during a round trip.
+    all_tag_by_id = {
         tag.id: tag
-        for tag in Tag.objects.filter(id__in=used_tag_ids).select_related('parent')
+        for tag in Tag.objects.select_related('parent')
+    } if used_tag_ids else {}
+    expanded_tag_ids = set(used_tag_ids)
+    for tag_id in tuple(used_tag_ids):
+        current = all_tag_by_id.get(tag_id)
+        visited = set()
+        while current and current.parent_id and current.parent_id not in visited:
+            visited.add(current.parent_id)
+            expanded_tag_ids.add(current.parent_id)
+            current = all_tag_by_id.get(current.parent_id)
+    tag_by_id = {
+        tag_id: all_tag_by_id[tag_id]
+        for tag_id in expanded_tag_ids
+        if tag_id in all_tag_by_id
     }
     for tag in tag_by_id.values():
         parent_uuid = None
@@ -263,22 +287,48 @@ def export_state(include_images=True, verified_only=False):
         'users': len(payload['meta']['user_map']),
     }
 
-    export_dir = Path(settings.EXPORT_FOLDER)
-    export_dir.mkdir(parents=True, exist_ok=True)
-    suffix = '_verified' if verified_only else ''
-    filepath = reserve_artifact_path(export_dir, f'questions_state{suffix}', '.json')
-    filename = download_filename(filepath)
-
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
-
-    # Never publish a state artifact this same deployment is configured to
-    # reject on upload.  This check happens after serialization because base64
-    # image expansion cannot be estimated reliably from model metadata alone.
     transfer_limit = min(
         settings.MAX_STATE_TRANSFER_SIZE,
         settings.MAX_UPLOAD_SIZE,
     )
+    if fmt == 'xlsx':
+        # XLSX is compressed. Bound the canonical, reconstructed state too,
+        # otherwise a highly-compressible workbook could be downloadable but
+        # too large for the state importer once decoded.
+        canonical_size = len(json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(',', ':'),
+            default=str,
+        ).encode('utf-8'))
+        if canonical_size > transfer_limit:
+            return {
+                'error': (
+                    'حجم حزمة الحالة يتجاوز حد الاستيراد. '
+                    'صدّر الحزمة بدون صور أو ارفع '
+                    'MAX_STATE_TRANSFER_SIZE وMAX_UPLOAD_SIZE.'
+                ),
+                'code': 413,
+            }
+
+    export_dir = Path(settings.EXPORT_FOLDER)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    suffix = '_verified' if verified_only else ''
+    extension = '.xlsx' if fmt == 'xlsx' else '.json'
+    filepath = reserve_artifact_path(
+        export_dir, f'questions_state{suffix}', extension,
+    )
+    filename = download_filename(filepath)
+
+    if fmt == 'xlsx':
+        write_state_workbook(payload, filepath)
+    else:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+
+    # Never publish a state artifact this same deployment is configured to
+    # reject on upload.  This check happens after serialization because base64
+    # image expansion cannot be estimated reliably from model metadata alone.
     if filepath.stat().st_size > transfer_limit:
         filepath.unlink(missing_ok=True)
         return {

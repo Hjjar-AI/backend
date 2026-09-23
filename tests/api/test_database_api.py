@@ -341,6 +341,18 @@ class ExportDatabaseViewTests(CacheClearingTestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn('application/json', resp['Content-Type'])
 
+    def test_state_export_returns_full_xlsx(self):
+        resp = self.client.get('/api/v1/database/export/state/?format=xlsx')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            resp['Content-Type'],
+        )
+
+    def test_state_export_rejects_unknown_format(self):
+        resp = self.client.get('/api/v1/database/export/state/?format=xml')
+        self.assertEqual(resp.status_code, 400)
+
     def test_state_export_query_params_passed_through(self):
         resp = self.client.get(
             '/api/v1/database/export/state/?include_images=false&verified_only=false'

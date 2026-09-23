@@ -56,16 +56,37 @@ class StateRoundTripTests(CacheClearingTestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         super().tearDown()
 
-    def _export(self):
-        return ExportService.export_state(include_images=False)
+    def _export(self, fmt='json'):
+        return ExportService.export_state(include_images=False, fmt=fmt)
 
     def _import_file(self, filepath, username='importer'):
         with open(filepath, 'rb') as f:
             raw = f.read()
+        is_xlsx = str(filepath).lower().endswith('.xlsx')
         upload = SimpleUploadedFile(
-            'state.json', raw, content_type='application/json',
+            'state.xlsx' if is_xlsx else 'state.json',
+            raw,
+            content_type=(
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                if is_xlsx else 'application/json'
+            ),
         )
         return ImportService.import_state(upload, username, mode='merge')
+
+    def test_xlsx_roundtrip_uses_the_same_state_import_pipeline(self):
+        author = make_user('xlsx_author')
+        original = make_question(owner=author, question='Excel roundtrip?')
+
+        result = self._export(fmt='xlsx')
+        Question.objects.all().delete()
+
+        import_result = self._import_file(
+            result['filepath'], username='xlsx_author',
+        )
+        self.assertNotIn('error', import_result)
+        restored = Question.objects.get()
+        self.assertEqual(restored.uuid, original.uuid)
+        self.assertEqual(restored.question, 'Excel roundtrip?')
 
     def test_roundtrip_creates_same_uuids(self):
         author = make_user('author')
@@ -154,6 +175,32 @@ class StateRoundTripTests(CacheClearingTestCase):
         self.assertTrue(restored.verified)
         self.assertEqual(restored.verified_by, 'moderator')
         self.assertEqual(restored.verification_notes, 'looks good')
+
+    def test_roundtrip_preserves_statistics_version_and_audit_fields(self):
+        author = make_user('stats_author')
+        original = make_question(owner=author)
+        original.times_answered = 12
+        original.times_correct = 8
+        original.version = 5
+        original.updated_by = 'auditor'
+        original.save(update_fields=[
+            'times_answered', 'times_correct', 'version', 'updated_by',
+        ])
+        original_created_at = original.created_at
+        original_updated_at = original.updated_at
+
+        result = self._export()
+        Question.objects.all().delete()
+
+        self._import_file(result['filepath'], username='stats_author')
+
+        restored = Question.objects.get()
+        self.assertEqual(restored.times_answered, 12)
+        self.assertEqual(restored.times_correct, 8)
+        self.assertEqual(restored.version, 5)
+        self.assertEqual(restored.updated_by, 'auditor')
+        self.assertEqual(restored.created_at, original_created_at)
+        self.assertEqual(restored.updated_at, original_updated_at)
 
     def test_importer_becomes_owner_by_design(self):
         """

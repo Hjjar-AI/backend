@@ -17,6 +17,7 @@ See ImportStateView in apps/database/views.py for the full contract.
 import json
 import logging
 
+from django.conf import settings
 from django.db import transaction
 
 from ..author_resolution import (
@@ -26,6 +27,7 @@ from ..author_resolution import (
 )
 from ..validators import get_user_safe, verify_upload_mime
 from ..staging import stage_upload, cleanup_staged_upload
+from ...state_workbook import read_state_workbook, StateWorkbookError
 from .constants import (
     STATE_IMPORT_MODE_MERGE,
     STATE_IMPORT_MODE_REPLACE,
@@ -83,28 +85,57 @@ def import_state(
                the prompt.
 
     TEMP-FILE NAME — see flat_import.import_file for the full note.
-    Files are named `import_<uuid>.json` so the periodic sweep in
+    Files are named `import_<uuid>.json` or `import_<uuid>.xlsx` so the periodic sweep in
     `apps/core/utils.py::cleanup_old_temp_files` can reclaim an
     upload that was orphaned mid-import.
     """
     if mode not in VALID_STATE_IMPORT_MODES:
         return {'error': 'وضع الاستيراد غير صالح', 'code': 400}
 
-    if not file.name.lower().endswith('.json'):
-        return {'error': 'الرجاء اختيار ملف JSON', 'code': 400}
+    filename = str(getattr(file, 'name', '')).lower()
+    if filename.endswith('.json'):
+        suffix = '.json'
+    elif filename.endswith('.xlsx'):
+        suffix = '.xlsx'
+    else:
+        return {'error': 'الرجاء اختيار ملف JSON أو XLSX كامل', 'code': 400}
 
     mime_error = verify_upload_mime(file)
     if mime_error is not None:
         return mime_error
 
-    filepath = stage_upload(file, '.json')
+    filepath = stage_upload(file, suffix)
 
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            payload = json.load(f)
-    except Exception:
+        if suffix == '.xlsx':
+            transfer_limit = min(
+                settings.MAX_STATE_TRANSFER_SIZE,
+                settings.MAX_UPLOAD_SIZE,
+            )
+            payload = read_state_workbook(
+                filepath,
+                max_uncompressed_size=transfer_limit * 4,
+            )
+        else:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+    except (OSError, UnicodeError, json.JSONDecodeError, StateWorkbookError):
         cleanup_staged_upload(filepath)
-        return {'error': 'ملف JSON غير صالح', 'code': 400}
+        return {'error': 'ملف الحالة غير صالح', 'code': 400}
+
+    transfer_limit = min(
+        settings.MAX_STATE_TRANSFER_SIZE,
+        settings.MAX_UPLOAD_SIZE,
+    )
+    canonical_size = len(json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(',', ':'),
+        default=str,
+    ).encode('utf-8'))
+    if canonical_size > transfer_limit:
+        cleanup_staged_upload(filepath)
+        return {'error': 'حجم بيانات الحالة بعد فكها يتجاوز الحد', 'code': 413}
 
     try:
         err = _validate_state_envelope(payload)

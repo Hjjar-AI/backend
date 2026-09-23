@@ -233,7 +233,7 @@ def _validate_state_envelope(payload):
         if verified_at:
             try:
                 datetime.fromisoformat(str(verified_at).replace('Z', '+00:00'))
-            except ValueError:
+            except (TypeError, ValueError):
                 return {'error': f'السؤال رقم {idx + 1}: verified_at غير صالح', 'code': 400}
         explanation = entry.get('explanation') or ''
         if not isinstance(explanation, str) or len(explanation) > EXPLANATION_TEXT_MAX_LENGTH:
@@ -242,6 +242,7 @@ def _validate_state_envelope(payload):
         for field, max_length in (
             ('source', 200),
             ('verified_by', 80),
+            ('updated_by', 80),
         ):
             value = entry.get(field) or ''
             if not isinstance(value, str) or len(value) > max_length:
@@ -260,6 +261,54 @@ def _validate_state_envelope(payload):
             or case_order < 1
         ):
             return {'error': f'السؤال رقم {idx + 1}: case_order غير صالح', 'code': 400}
+
+        for field, minimum in (
+            ('times_answered', 0),
+            ('times_correct', 0),
+            ('version', 1),
+        ):
+            value = entry.get(field, 1 if field == 'version' else 0)
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < minimum
+            ):
+                return {
+                    'error': f'السؤال رقم {idx + 1}: {field} غير صالح',
+                    'code': 400,
+                }
+        if entry.get('times_correct', 0) > entry.get('times_answered', 0):
+            return {
+                'error': f'السؤال رقم {idx + 1}: times_correct يتجاوز times_answered',
+                'code': 400,
+            }
+
+        parsed_timestamps = {}
+        for field in ('created_at', 'updated_at'):
+            value = entry.get(field)
+            if not value:
+                continue
+            try:
+                parsed_timestamps[field] = datetime.fromisoformat(
+                    str(value).replace('Z', '+00:00')
+                )
+            except (TypeError, ValueError):
+                return {
+                    'error': f'السؤال رقم {idx + 1}: {field} غير صالح',
+                    'code': 400,
+                }
+        created_at = parsed_timestamps.get('created_at')
+        updated_at = parsed_timestamps.get('updated_at')
+        if created_at and updated_at:
+            try:
+                timestamps_reversed = updated_at < created_at
+            except TypeError:
+                timestamps_reversed = True
+            if timestamps_reversed:
+                return {
+                    'error': f'السؤال رقم {idx + 1}: ترتيب التواريخ غير صالح',
+                    'code': 400,
+                }
 
         for field in ('authored_by_name', 'owned_by_name'):
             value = entry.get(field)

@@ -10,6 +10,7 @@ from apps.questions.services.exporting import ExportService
 from apps.questions.services.exporting.state_export import (
     STATE_FORMAT, STATE_FORMAT_VERSION,
 )
+from apps.questions.services.state_workbook import read_state_workbook
 from tests.base import CacheClearingTestCase
 from tests.factories import (
     make_user, make_question, make_category, make_tag, make_case,
@@ -53,6 +54,36 @@ class StateExportTests(CacheClearingTestCase):
         self.assertEqual(q['authored_by_name'], 'author')
         self.assertEqual(q['owned_by_uuid'], str(author.uuid))
 
+    def test_full_question_statistics_and_audit_fields_are_exported(self):
+        author = make_user('stats_author')
+        question = make_question(owner=author)
+        question.times_answered = 9
+        question.times_correct = 6
+        question.version = 3
+        question.updated_by = 'moderator'
+        question.save(update_fields=[
+            'times_answered', 'times_correct', 'version', 'updated_by',
+        ])
+
+        exported = self._payload(ExportService.export_state())['questions'][0]
+        self.assertEqual(exported['times_answered'], 9)
+        self.assertEqual(exported['times_correct'], 6)
+        self.assertEqual(exported['version'], 3)
+        self.assertEqual(exported['updated_by'], 'moderator')
+        self.assertIsNotNone(exported['created_at'])
+        self.assertIsNotNone(exported['updated_at'])
+
+    def test_xlsx_is_a_lossless_container_for_state_envelope(self):
+        author = make_user('xlsx_author')
+        make_question(owner=author, question='Workbook question?')
+
+        result = ExportService.export_state(fmt='xlsx')
+        self.assertTrue(result['filename'].endswith('.xlsx'))
+        payload = read_state_workbook(result['filepath'])
+        self.assertEqual(payload['meta']['format'], STATE_FORMAT)
+        self.assertEqual(payload['meta']['version'], STATE_FORMAT_VERSION)
+        self.assertEqual(payload['questions'][0]['question'], 'Workbook question?')
+
     def test_user_map_covers_referenced_users(self):
         author = make_user('author')
         make_question(owner=author)
@@ -90,6 +121,20 @@ class StateExportTests(CacheClearingTestCase):
         self.assertEqual(payload['categories'][0]['uuid'], str(cat.uuid))
         self.assertEqual(len(payload['tags']), 1)
         self.assertEqual(payload['tags'][0]['uuid'], str(tag.uuid))
+
+    def test_tag_ancestor_chain_is_exported_even_when_only_child_is_assigned(self):
+        author = make_user('tag_author')
+        parent = make_tag('parent-tag')
+        child = make_tag('child-tag')
+        child.parent = parent
+        child.save(update_fields=['parent'])
+        question = make_question(owner=author)
+        question.tags.add(child)
+
+        payload = self._payload(ExportService.export_state())
+        tags = {item['name']: item for item in payload['tags']}
+        self.assertEqual(set(tags), {'parent-tag', 'child-tag'})
+        self.assertEqual(tags['child-tag']['parent_uuid'], str(parent.uuid))
 
     def test_orphan_categories_not_exported(self):
         """A category with no exported question is dropped."""
@@ -179,7 +224,9 @@ class StateExportTests(CacheClearingTestCase):
             'case_order', 'is_draft', 'verified', 'verified_by',
             'verified_at', 'verification_notes',
             'authored_by_uuid', 'authored_by_name',
-            'owned_by_uuid', 'owned_by_name', 'image',
+            'owned_by_uuid', 'owned_by_name', 'updated_by',
+            'times_answered', 'times_correct', 'version',
+            'created_at', 'updated_at', 'image',
         }
         missing = required - set(q.keys())
         self.assertEqual(missing, set(), f'missing keys: {missing}')

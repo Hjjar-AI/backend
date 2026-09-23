@@ -402,12 +402,14 @@ class ExportStateView(APIView):
     def get(self, request):
         include_images = request.query_params.get('include_images', 'true') != 'false'
         verified_only = request.query_params.get('verified_only', 'false') == 'true'
+        fmt = request.query_params.get('format', 'json').lower().strip()
 
         result = ExportService.export_state(
             include_images=include_images,
             verified_only=verified_only,
+            fmt=fmt,
         )
-        return _export_response(result, content_type='application/json')
+        return _export_response(result)
 
 
 class ImportStateView(APIView):
@@ -415,7 +417,7 @@ class ImportStateView(APIView):
     Import a state envelope. Requires 'admin.database'.
 
     Body (multipart):
-        file            the .json envelope (required)
+        file            the .json envelope or full .xlsx workbook (required)
         mode            'merge' (default) | 'replace'
         dry_run         'true' | 'false' (default) — write nothing,
                         return counts only

@@ -69,7 +69,7 @@ class ExportService:
         )
 
     @staticmethod
-    def export_state(include_images=True, verified_only=False):
+    def export_state(include_images=True, verified_only=False, fmt='json'):
         """
         Full state envelope (v2). See state_export.export_state.
 
@@ -82,6 +82,7 @@ class ExportService:
         return _export_state(
             include_images=include_images,
             verified_only=verified_only,
+            fmt=fmt,
         )
 
 

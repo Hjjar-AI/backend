@@ -53,6 +53,7 @@ import logging
 from datetime import datetime
 
 from django.db import transaction
+from django.utils import timezone
 
 from ....models import (
     Question,
@@ -71,6 +72,29 @@ from .identity import _find_existing_by_uuid_or_key
 from .plan import prepared_question, canonical_uuid
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_optional_datetime(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except (TypeError, ValueError):
+        return None
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed)
+    return parsed
+
+
+def _restore_question_timestamps(question, entry):
+    """Restore source audit timestamps without triggering ``auto_now``."""
+    updates = {}
+    for field in ('created_at', 'updated_at'):
+        parsed = _parse_optional_datetime(entry.get(field))
+        if parsed is not None:
+            updates[field] = parsed
+    if updates:
+        Question.objects.filter(pk=question.pk).update(**updates)
 
 
 def _create_question_from_entry(
@@ -119,6 +143,10 @@ def _create_question_from_entry(
         verification_notes=entry.get('verification_notes') or None,
         authored_by=author,
         owned_by=acting_user,
+        updated_by=(entry.get('updated_by') or '')[:80] or None,
+        times_answered=entry.get('times_answered', 0),
+        times_correct=entry.get('times_correct', 0),
+        version=entry.get('version', 1),
     )
 
 
@@ -398,15 +426,7 @@ def _apply_state(
             else:
                 counts['questions_with_unresolved_author'] += 1
 
-            verified_at = None
-            verified_at_raw = entry.get('verified_at')
-            if verified_at_raw:
-                try:
-                    verified_at = datetime.fromisoformat(
-                        verified_at_raw.replace('Z', '+00:00')
-                    )
-                except (ValueError, AttributeError):
-                    verified_at = None
+            verified_at = _parse_optional_datetime(entry.get('verified_at'))
 
             existing_q = existing_q_by_uuid.get(uuid_str)
 
@@ -460,6 +480,19 @@ def _apply_state(
                     )
                     existing_q.authored_by = author
                     existing_q.owned_by = acting_user
+                    # These fields were added additively to v2. Preserve
+                    # local values when importing an older v2 envelope that
+                    # predates them; current exports always include them.
+                    if 'updated_by' in entry:
+                        existing_q.updated_by = (
+                            (entry.get('updated_by') or '')[:80] or None
+                        )
+                    if 'times_answered' in entry:
+                        existing_q.times_answered = entry['times_answered']
+                    if 'times_correct' in entry:
+                        existing_q.times_correct = entry['times_correct']
+                    if 'version' in entry:
+                        existing_q.version = entry['version']
                     existing_q.save()
 
                     q = existing_q
@@ -496,6 +529,8 @@ def _apply_state(
                 saved = apply_image(q, image_block)
                 if saved:
                     counts['images_imported'] += 1
+
+            _restore_question_timestamps(q, entry)
 
     # ── Trust recompute (batch) ───────────────────────────────────
     affected_author_ids.add(acting_user.id)

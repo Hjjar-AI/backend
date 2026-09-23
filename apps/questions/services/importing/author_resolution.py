@@ -106,9 +106,9 @@ def resolve_author(
 
 def collect_authors_from_envelope(payload):
     """
-    Return { name: { uuid, question_count } } for every author
-    named on any question in the envelope. Authors without a name
-    are ignored.
+    Return { name: { uuid, question_count, case_count } } for every
+    author named on a question or clinical case in the envelope.
+    Authors without a name are ignored.
 
     Used by the analyze pass to build the mapping-modal prompt. The
     count is shown to the admin ("Ali authored 12 questions") so a
@@ -123,8 +123,21 @@ def collect_authors_from_envelope(payload):
             authors[name] = {
                 'uuid': entry.get('authored_by_uuid'),
                 'question_count': 0,
+                'case_count': 0,
             }
         authors[name]['question_count'] += 1
+
+    for entry in payload.get('cases') or []:
+        name = (entry.get('authored_by_name') or '').strip()
+        if not name:
+            continue
+        if name not in authors:
+            authors[name] = {
+                'uuid': entry.get('authored_by_uuid'),
+                'question_count': 0,
+                'case_count': 0,
+            }
+        authors[name]['case_count'] += 1
     return authors
 
 

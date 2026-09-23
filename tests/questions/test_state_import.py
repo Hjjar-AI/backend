@@ -141,6 +141,22 @@ class ReplaceModeTests(CacheClearingTestCase):
         self.assertEqual(self.covered_q.pk, old_pk)
         self.assertEqual(self.covered_q.question, 'New text?')
 
+    def test_replace_from_older_v2_preserves_stats_missing_from_envelope(self):
+        self.covered_q.times_answered = 11
+        self.covered_q.times_correct = 7
+        self.covered_q.version = 4
+        self.covered_q.save(update_fields=[
+            'times_answered', 'times_correct', 'version',
+        ])
+        payload = _envelope([_q_entry(self.covered_uuid)])
+
+        ImportService.import_state(_upload(payload), 'acting', mode='replace')
+
+        self.covered_q.refresh_from_db()
+        self.assertEqual(self.covered_q.times_answered, 11)
+        self.assertEqual(self.covered_q.times_correct, 7)
+        self.assertEqual(self.covered_q.version, 4)
+
     def test_replace_preserves_through_fk_rows(self):
         """
         The whole point of the in-place upsert. A Bookmark row
@@ -232,3 +248,23 @@ class AnalyzePassTests(CacheClearingTestCase):
             _upload(payload), 'acting', analyze=True,
         )
         self.assertEqual(result['unknown_authors'], [])
+
+    def test_analyze_reports_case_only_authors_for_mapping(self):
+        make_user('acting')
+        case = {
+            'uuid': str(uuid_mod.uuid4()),
+            'key': 'case-only-author',
+            'title': '',
+            'stem': 'Case stem',
+            'authored_by_name': 'External Case Author',
+            'authored_by_uuid': str(uuid_mod.uuid4()),
+        }
+        payload = _envelope([], cases=[case])
+
+        result = ImportService.import_state(
+            _upload(payload), 'acting', analyze=True,
+        )
+
+        self.assertEqual(len(result['unknown_authors']), 1)
+        self.assertEqual(result['unknown_authors'][0]['question_count'], 0)
+        self.assertEqual(result['unknown_authors'][0]['case_count'], 1)

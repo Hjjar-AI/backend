@@ -37,6 +37,7 @@ def _analyze_unknown_authors(
             'name': name,
             'uuid': author_uuid,
             'question_count': info['question_count'],
+            'case_count': info.get('case_count', 0),
         })
     unknown.sort(key=lambda x: x['name'])
     return unknown
