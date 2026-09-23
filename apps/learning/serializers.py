@@ -14,7 +14,8 @@ class UserQuestionAttemptSerializer(serializers.ModelSerializer):
         model = UserQuestionAttempt
         fields = [
             'question_id',
-            'last_correct', 'last_confidence', 'last_error_reason',
+            'last_correct', 'last_confidence', 'last_confidence_score',
+            'last_error_reason',
             'last_answered_at',
             'attempts', 'wrong_count', 'ever_correct',
             'ease_factor', 'interval_days', 'repetitions', 'next_due',

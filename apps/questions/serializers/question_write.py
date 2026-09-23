@@ -42,6 +42,7 @@ class _QuestionWriteFields(serializers.ModelSerializer):
             'question', 'choices', 'correct_answer', 'explanation', 'source',
             'source_document', 'source_page', 'translations',
             'tags', 'difficulty', 'category',
+            'knowledge_object', 'last_revised_at',
             'case_key', 'case_stem', 'case_order',
         ]
 

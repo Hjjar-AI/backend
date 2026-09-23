@@ -39,8 +39,14 @@ def normalize_translations(value, *, max_choices=8):
                 f'{", ".join(sorted(unknown))}'
             )
 
-        question = str(raw_content.get('question') or '').strip()
-        explanation = str(raw_content.get('explanation') or '').strip()
+        raw_question = raw_content.get('question')
+        raw_explanation = raw_content.get('explanation')
+        if raw_question is not None and not isinstance(raw_question, str):
+            raise ValueError(f'Translation {locale} question must be a string')
+        if raw_explanation is not None and not isinstance(raw_explanation, str):
+            raise ValueError(f'Translation {locale} explanation must be a string')
+        question = (raw_question or '').strip()
+        explanation = (raw_explanation or '').strip()
         choices = raw_content.get('choices') or []
         if not isinstance(choices, list) or any(
             not isinstance(choice, str) for choice in choices

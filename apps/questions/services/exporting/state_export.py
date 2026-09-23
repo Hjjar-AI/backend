@@ -1,6 +1,6 @@
 # backend/apps/questions/services/exporting/state_export.py
 """
-Question-bank package export path (format v3).
+Question-bank package export path (format v4).
 
 Produces the full questions-data envelope: categories, tags, cases,
 questions, and a user_map for the mapping UI. Images are embedded as
@@ -18,7 +18,7 @@ from apps.questions.services.state_format import STATE_FORMAT, STATE_FORMAT_VERS
 from apps.questions.services.state_workbook import write_state_workbook
 from apps.questions.filters import filter_questions
 
-from ...models import Question, Category, Tag, ClinicalCase
+from ...models import Question, Category, Tag, ClinicalCase, KnowledgeObject
 
 from .image_export import read_image_as_base64
 
@@ -55,7 +55,7 @@ def export_state(
     filters=None,
 ):
     """
-    Build a portable question-bank package (format v3).
+    Build a portable question-bank package (format v4).
 
     Sections:
       • categories — full field set, keyed by uuid.
@@ -113,13 +113,17 @@ def export_state(
         'categories': [],
         'tags': [],
         'cases': [],
+        'knowledge_objects': [],
         'questions': [],
     }
 
     # ── Questions ─────────────────────────────────────────────────
     qs = (
         Question.objects
-        .select_related('case', 'category', 'authored_by', 'owned_by')
+        .select_related(
+            'case', 'category', 'authored_by', 'owned_by',
+            'knowledge_object',
+        )
         .prefetch_related('tags')
     )
     qs = filter_questions(
@@ -144,6 +148,7 @@ def export_state(
     used_category_ids = set()
     used_tag_ids = set()
     used_case_ids = set()
+    used_knowledge_object_ids = set()
     used_user_ids = set()
 
     for q in qs:
@@ -151,6 +156,8 @@ def export_state(
             used_category_ids.add(q.category_id)
         if q.case_id:
             used_case_ids.add(q.case_id)
+        if q.knowledge_object_id:
+            used_knowledge_object_ids.add(q.knowledge_object_id)
         if q.authored_by_id:
             used_user_ids.add(q.authored_by_id)
         if q.owned_by_id:
@@ -171,6 +178,12 @@ def export_state(
             'source_page': q.source_page,
             'translations': q.translations or {},
             'difficulty': q.difficulty,
+            'knowledge_object_uuid': (
+                str(q.knowledge_object.uuid) if q.knowledge_object_id else None
+            ),
+            'last_revised_at': (
+                q.last_revised_at.isoformat() if q.last_revised_at else None
+            ),
             'category_uuid': (
                 str(q.category.uuid) if q.category_id else None
             ),
@@ -222,6 +235,41 @@ def export_state(
         question_payload['tags'] = [str(tag.uuid) for tag in tag_list]
 
         payload['questions'].append(question_payload)
+
+    # ── Knowledge objects ────────────────────────────────────────
+    for obj in (
+        KnowledgeObject.objects
+        .filter(id__in=used_knowledge_object_ids)
+        .select_related('category', 'created_by')
+        .prefetch_related('tags')
+    ):
+        if obj.category_id:
+            used_category_ids.add(obj.category_id)
+        if obj.created_by_id:
+            used_user_ids.add(obj.created_by_id)
+        object_tags = list(obj.tags.all())
+        used_tag_ids.update(tag.id for tag in object_tags)
+        payload['knowledge_objects'].append({
+            'uuid': str(obj.uuid),
+            'title': obj.title,
+            'learning_objective': obj.learning_objective,
+            'canonical_answer': obj.canonical_answer,
+            'key_facts': list(obj.key_facts or []),
+            'misconceptions': list(obj.misconceptions or []),
+            'category_uuid': str(obj.category.uuid) if obj.category_id else None,
+            'tags': [str(tag.uuid) for tag in object_tags],
+            'source_document': obj.source_document or '',
+            'source_page': obj.source_page,
+            'translations': obj.translations or {},
+            'status': obj.status,
+            'version': obj.version,
+            'last_revised_at': (
+                obj.last_revised_at.isoformat() if obj.last_revised_at else None
+            ),
+            'created_by_uuid': (
+                str(obj.created_by.uuid) if obj.created_by_id else None
+            ),
+        })
 
     # ── Cases ─────────────────────────────────────────────────────
     #
@@ -307,6 +355,7 @@ def export_state(
         'categories': len(payload['categories']),
         'tags': len(payload['tags']),
         'cases': len(payload['cases']),
+        'knowledge_objects': len(payload['knowledge_objects']),
         'questions': len(payload['questions']),
         'users': len(payload['meta']['user_map']),
     }

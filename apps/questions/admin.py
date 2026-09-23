@@ -9,6 +9,7 @@ from .models import (
     Question,
     ClinicalCase,
     ExternalAuthorMapping,
+    KnowledgeObject,
 )
 
 
@@ -57,6 +58,21 @@ class ClinicalCaseAdmin(admin.ModelAdmin):
     question_count.short_description = 'Questions'
 
 
+@admin.register(KnowledgeObject)
+class KnowledgeObjectAdmin(admin.ModelAdmin):
+    list_display = (
+        'title', 'status', 'category', 'question_count',
+        'last_revised_at', 'created_by',
+    )
+    list_filter = ('status', 'category')
+    search_fields = ('title', 'learning_objective', 'canonical_answer')
+    readonly_fields = ('uuid', 'created_at', 'updated_at', 'version')
+    filter_horizontal = ('tags',)
+
+    def question_count(self, obj):
+        return obj.questions.count()
+
+
 @admin.register(Question)
 class QuestionAdmin(admin.ModelAdmin):
     list_display = (
@@ -65,12 +81,14 @@ class QuestionAdmin(admin.ModelAdmin):
         'times_answered', 'times_correct',
     )
     list_filter = ('difficulty', 'verified', 'category')
-    search_fields = ('question', 'explanation', 'source')
+    search_fields = ('question', 'explanation', 'source', 'source_document')
     actions = ['bulk_verify', 'bulk_unverify']
     list_select_related = ('authored_by', 'owned_by', 'category')
     fields = (
         'question', 'image', 'choices', 'correct_answer', 'explanation',
-        'source', 'difficulty', 'category', 'verified', 'verified_by',
+        'source', 'source_document', 'source_page', 'translations',
+        'difficulty', 'category', 'knowledge_object', 'last_revised_at',
+        'verified', 'verified_by',
         'verified_at', 'verification_notes',
         # Authorship and ownership — two FKs, two independent facts.
         # `authored_by` is the writer; `owned_by` is the current

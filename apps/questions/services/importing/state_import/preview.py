@@ -2,7 +2,7 @@
 """
 Read-only preview passes: dry-run counters and unknown-author analysis.
 """
-from ....models import Question, Category, Tag, ClinicalCase
+from ....models import Question, Category, Tag, ClinicalCase, KnowledgeObject
 from ..image_ingest import decode_import_image
 from ..author_resolution import collect_authors_from_envelope
 from .constants import STATE_IMPORT_MODE_REPLACE
@@ -95,6 +95,8 @@ def _preview_state(
         'categories_updated': 0,
         'tags_created': 0,
         'cases_created': 0,
+        'knowledge_objects_created': 0,
+        'knowledge_objects_updated': 0,
         'questions_created': 0,
         'questions_updated': 0,
         'questions_skipped': 0,
@@ -148,6 +150,24 @@ def _preview_state(
             preview['cases_created'] += 1
         existing_case_uuids.add(uuid_str)
         existing_case_keys.add(key)
+
+    existing_object_uuids = set(
+        str(u) for u in KnowledgeObject.objects.values_list('uuid', flat=True)
+    )
+    existing_object_titles = set(
+        KnowledgeObject.objects.values_list('title', flat=True)
+    )
+    for obj in payload.get('knowledge_objects') or []:
+        uuid_str = canonical_uuid(obj.get('uuid'))
+        title = (obj.get('title') or '').strip()
+        if not uuid_str or not title:
+            continue
+        if uuid_str in existing_object_uuids or title in existing_object_titles:
+            preview['knowledge_objects_updated'] += 1
+        else:
+            preview['knowledge_objects_created'] += 1
+        existing_object_uuids.add(uuid_str)
+        existing_object_titles.add(title)
 
     question_entries = payload.get('questions') or []
 

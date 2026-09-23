@@ -85,6 +85,7 @@ urlpatterns = [
 
     path('api/v1/exam/', include('apps.exams.urls')),
     path('api/v1/study/', include('apps.exams.urls')),
+    path('api/v1/recall/', include('apps.exams.urls')),
 
     path('api/v1/', include('apps.planning.urls')),
     path('api/v1/', include('apps.groups.urls')),

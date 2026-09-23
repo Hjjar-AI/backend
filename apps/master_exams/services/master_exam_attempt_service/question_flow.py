@@ -4,6 +4,7 @@ Current-question lookup, navigation, and unanswered iteration.
 """
 from apps.questions.models import Question
 from apps.questions.payloads import exam_question_payload, snapshot_image_url
+from apps.learning.confidence import normalize_confidence
 
 
 def _next_unanswered(question_ids, answers):
@@ -58,7 +59,7 @@ def current_question(attempt):
         'total': len(attempt_qids),
         'question': payload,
         'saved_answer': saved.get('answer'),
-        'saved_confidence': saved.get('confidence', True),
+        'saved_confidence': normalize_confidence(saved.get('confidence', 3)),
     }
 
 

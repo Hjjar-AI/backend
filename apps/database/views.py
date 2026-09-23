@@ -206,6 +206,10 @@ class DataQualityReportView(APIView):
     def post(self, request):
         report = build_data_quality_report()
         created = flag_data_quality_report(report, request.user)
+        # Re-scan after flag creation so the response immediately reflects
+        # `has_open_quality_flag=True`; otherwise the UI would invite the
+        # admin to submit the same flags again until the next manual refresh.
+        report = build_data_quality_report()
         report['flags_created'] = created
         log_privileged_action(
             request,

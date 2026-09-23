@@ -33,7 +33,10 @@ class QuestionService:
         """
         qs = (
             Question.objects.all()
-            .select_related('authored_by', 'owned_by', 'case', 'category')
+            .select_related(
+                'authored_by', 'owned_by', 'case', 'category',
+                'knowledge_object',
+            )
             .prefetch_related('tags')
         )
         if user is None or not getattr(user, 'is_authenticated', False):
@@ -212,6 +215,17 @@ class QuestionService:
             update_fields['updated_by'] = user.username
             update_fields['version'] = F('version') + 1
             update_fields['updated_at'] = timezone.now()
+            substantive_fields = {
+                'question', 'choices', 'correct_answer', 'explanation',
+                'source', 'source_document', 'source_page', 'translations',
+                'difficulty', 'category', 'knowledge_object', 'case',
+                'case_order',
+            }
+            if (
+                'last_revised_at' not in update_fields
+                and substantive_fields.intersection(update_fields)
+            ):
+                update_fields['last_revised_at'] = timezone.localdate()
 
             if expected_version:
                 rows = Question.objects.filter(
@@ -551,8 +565,13 @@ class QuestionService:
                 correct_answer=original.correct_answer,
                 explanation=original.explanation,
                 source=original.source,
+                source_document=original.source_document,
+                source_page=original.source_page,
+                translations=original.translations,
                 difficulty=original.difficulty,
                 category=original.category,
+                knowledge_object=original.knowledge_object,
+                last_revised_at=original.last_revised_at,
                 verified=False,
                 authored_by=user,
                 owned_by=user,

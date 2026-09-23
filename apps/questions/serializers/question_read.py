@@ -25,6 +25,12 @@ class QuestionSerializer(serializers.ModelSerializer):
     """
     category_name = serializers.CharField(source='category.name', read_only=True)
     category_color = serializers.CharField(source='category.color', read_only=True)
+    knowledge_object_title = serializers.CharField(
+        source='knowledge_object.title', read_only=True, default=None,
+    )
+    knowledge_object_objective = serializers.CharField(
+        source='knowledge_object.learning_objective', read_only=True, default=None,
+    )
     tags = serializers.StringRelatedField(many=True, read_only=True)
     image_url = serializers.SerializerMethodField()
     case_sibling_count = serializers.SerializerMethodField()
@@ -55,6 +61,8 @@ class QuestionSerializer(serializers.ModelSerializer):
             'source_document', 'source_page', 'translations',
             'image_url',
             'tags', 'difficulty', 'category', 'category_name', 'category_color',
+            'knowledge_object', 'knowledge_object_title',
+            'knowledge_object_objective', 'last_revised_at',
             'verified', 'verified_by', 'verified_at', 'verification_notes',
             'authored_by', 'authored_by_username', 'authored_by_rank',
             'owned_by', 'owned_by_username',
@@ -70,6 +78,7 @@ class QuestionSerializer(serializers.ModelSerializer):
             'authored_by', 'authored_by_username', 'authored_by_rank',
             'owned_by', 'owned_by_username',
             'case',
+            'knowledge_object_title', 'knowledge_object_objective',
         ]
 
     def get_image_url(self, obj):

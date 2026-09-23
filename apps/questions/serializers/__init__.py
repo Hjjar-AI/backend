@@ -43,6 +43,7 @@ from .case import (
     CaseStemUpdateSerializer,
 )
 from .question_read import QuestionSerializer
+from .knowledge_object import KnowledgeObjectSerializer
 from .question_write import (
     QuestionCreateSerializer,
     QuestionUpdateSerializer,
@@ -75,6 +76,7 @@ __all__ = [
     'CaseStemUpdateSerializer',
     # Question read
     'QuestionSerializer',
+    'KnowledgeObjectSerializer',
     # Question write
     'QuestionCreateSerializer',
     'QuestionUpdateSerializer',

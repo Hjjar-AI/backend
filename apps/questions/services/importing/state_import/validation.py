@@ -64,7 +64,7 @@ def _validate_state_envelope(payload):
     if not isinstance(meta.get('selection', {}), dict):
         return {'error': "الحقل 'meta.selection' غير صالح", 'code': 400}
 
-    for key in ('categories', 'tags', 'cases', 'questions'):
+    for key in ('categories', 'tags', 'cases', 'knowledge_objects', 'questions'):
         if key not in payload or not isinstance(payload.get(key), list):
             return {'error': f"الحقل '{key}' غير صالح", 'code': 400}
 
@@ -109,6 +109,7 @@ def _validate_state_envelope(payload):
         (payload.get('categories') or [], 'uuid', 'التصنيفات'),
         (payload.get('tags') or [], 'uuid', 'الوسوم'),
         (payload.get('cases') or [], 'uuid', 'الحالات'),
+        (payload.get('knowledge_objects') or [], 'uuid', 'الأهداف المعرفية'),
         (payload.get('questions') or [], 'uuid', 'الأسئلة'),
     ):
         msg = _check_uuids(entries, field, label)
@@ -119,6 +120,7 @@ def _validate_state_envelope(payload):
         ('categories', 'name', 'التصنيفات', CATEGORY_NAME_MAX_LENGTH),
         ('tags', 'name', 'الوسوم', TAG_NAME_MAX_LENGTH),
         ('cases', 'key', 'الحالات', CASE_GROUP_MAX_LENGTH),
+        ('knowledge_objects', 'title', 'الأهداف المعرفية', 200),
     )
     for section, field, label, max_length in natural_keys:
         seen = set()
@@ -169,12 +171,39 @@ def _validate_state_envelope(payload):
         if not isinstance(icon, str) or len(icon) > 50:
             return {'error': f'التصنيفات: icon غير صالح في العنصر رقم {idx + 1}', 'code': 400}
 
+    for idx, obj in enumerate(payload['knowledge_objects']):
+        objective = obj.get('learning_objective')
+        answer = obj.get('canonical_answer') or ''
+        if not isinstance(objective, str) or not objective.strip() or len(objective) > QUESTION_TEXT_MAX_LENGTH:
+            return {'error': f'الهدف المعرفي رقم {idx + 1}: learning_objective غير صالح', 'code': 400}
+        if not isinstance(answer, str) or len(answer) > EXPLANATION_TEXT_MAX_LENGTH:
+            return {'error': f'الهدف المعرفي رقم {idx + 1}: canonical_answer غير صالح', 'code': 400}
+        for field in ('key_facts', 'misconceptions', 'tags'):
+            value = obj.get(field, [])
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                return {'error': f'الهدف المعرفي رقم {idx + 1}: {field} غير صالح', 'code': 400}
+        for field in ('category_uuid', 'created_by_uuid'):
+            value = _uuid_text(obj.get(field))
+            if value and not _is_valid_uuid(value):
+                return {'error': f'الهدف المعرفي رقم {idx + 1}: {field} غير صالح', 'code': 400}
+        if obj.get('status', 'active') not in {'draft', 'active', 'retired'}:
+            return {'error': f'الهدف المعرفي رقم {idx + 1}: status غير صالح', 'code': 400}
+        if not isinstance(obj.get('translations', {}), dict):
+            return {'error': f'الهدف المعرفي رقم {idx + 1}: translations غير صالح', 'code': 400}
+        revised = obj.get('last_revised_at')
+        if revised:
+            try:
+                datetime.fromisoformat(str(revised))
+            except (TypeError, ValueError):
+                return {'error': f'الهدف المعرفي رقم {idx + 1}: last_revised_at غير صالح', 'code': 400}
+
     for idx, entry in enumerate(payload.get('questions') or []):
         if not isinstance(entry, dict):
             continue
         for field, label in (
             ('category_uuid', 'التصنيف'),
             ('case_uuid', 'الحالة'),
+            ('knowledge_object_uuid', 'الهدف المعرفي'),
             ('authored_by_uuid', 'المؤلف'),
             ('owned_by_uuid', 'المالك'),
         ):
@@ -267,6 +296,15 @@ def _validate_state_envelope(payload):
                 'error': f'السؤال رقم {idx + 1}: source_page غير صالح',
                 'code': 400,
             }
+        revised = entry.get('last_revised_at')
+        if revised:
+            try:
+                datetime.fromisoformat(str(revised))
+            except (TypeError, ValueError):
+                return {
+                    'error': f'السؤال رقم {idx + 1}: last_revised_at غير صالح',
+                    'code': 400,
+                }
         try:
             normalize_translations(
                 entry.get('translations') or {},
@@ -368,6 +406,9 @@ def _validate_state_envelope(payload):
     category_uuids = {_canonical_uuid(item['uuid']) for item in payload['categories']}
     tag_uuids = {_canonical_uuid(item['uuid']) for item in payload['tags']}
     case_uuids = {_canonical_uuid(item['uuid']) for item in payload['cases']}
+    object_uuids = {
+        _canonical_uuid(item['uuid']) for item in payload['knowledge_objects']
+    }
     for idx, tag in enumerate(payload['tags']):
         parent_uuid = _uuid_text(tag.get('parent_uuid'))
         if parent_uuid:
@@ -380,6 +421,7 @@ def _validate_state_envelope(payload):
         references = (
             ('category_uuid', category_uuids, 'التصنيف'),
             ('case_uuid', case_uuids, 'الحالة'),
+            ('knowledge_object_uuid', object_uuids, 'الهدف المعرفي'),
         )
         for field, available, label in references:
             value = _uuid_text(entry.get(field))
@@ -393,5 +435,13 @@ def _validate_state_envelope(payload):
         canonical_tags = [_canonical_uuid(tag_uuid) for tag_uuid in entry['tags']]
         if len(canonical_tags) != len(set(canonical_tags)):
             return {'error': f'السؤال رقم {idx + 1}: يوجد وسم مكرر', 'code': 400}
+
+    for idx, obj in enumerate(payload['knowledge_objects']):
+        category_uuid = _uuid_text(obj.get('category_uuid'))
+        if category_uuid and _canonical_uuid(category_uuid) not in category_uuids:
+            return {'error': f'الهدف المعرفي رقم {idx + 1}: التصنيف غير موجود في الحزمة', 'code': 400}
+        for tag_uuid in obj.get('tags') or []:
+            if not _is_valid_uuid(tag_uuid) or _canonical_uuid(tag_uuid) not in tag_uuids:
+                return {'error': f'الهدف المعرفي رقم {idx + 1}: وسم غير موجود في الحزمة', 'code': 400}
 
     return None

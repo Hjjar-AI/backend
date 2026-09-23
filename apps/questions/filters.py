@@ -39,13 +39,13 @@ def filter_questions(queryset, filters=None, *, export=False, verified_only=Fals
     search = (filters.get('search') or '').strip()
     joins_tags = False
     if len(search) >= 2:
-        search_query = Q(question__icontains=search) | Q(explanation__icontains=search)
-        if export:
-            search_query |= (
-                Q(source__icontains=search)
-                | Q(source_document__icontains=search)
-            )
-        else:
+        search_query = (
+            Q(question__icontains=search)
+            | Q(explanation__icontains=search)
+            | Q(source__icontains=search)
+            | Q(source_document__icontains=search)
+        )
+        if not export:
             search_query |= Q(tags__name__icontains=search)
             joins_tags = True
         queryset = queryset.filter(search_query)

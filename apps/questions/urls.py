@@ -7,6 +7,16 @@ from . import views
 urlpatterns = [
     path('', views.QuestionListView.as_view(), name='question-list'),
     path('batch/', views.QuestionBatchView.as_view(), name='question-batch'),
+    path(
+        'knowledge-objects/',
+        views.KnowledgeObjectListCreateView.as_view(),
+        name='knowledge-object-list',
+    ),
+    path(
+        'knowledge-objects/<int:pk>/',
+        views.KnowledgeObjectDetailView.as_view(),
+        name='knowledge-object-detail',
+    ),
 
     # ── Cases ─────────────────────────────────────────────────────────
     path('cases/', views.CaseListView.as_view(), name='case-list'),

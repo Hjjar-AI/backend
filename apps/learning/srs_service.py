@@ -7,6 +7,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from .models import UserQuestionAttempt
+from .confidence import normalize_confidence, is_confident
 from apps.questions.models import Question
 
 logger = logging.getLogger(__name__)
@@ -23,12 +24,15 @@ def _next_interval(repetitions, previous_interval, ease):
     return max(1, round(previous_interval * ease))
 
 
-def _apply_review(attempt, is_correct, is_confident, error_reason=None, now=None):
+def _apply_review(attempt, is_correct, confidence_score, error_reason=None, now=None):
     now = now or timezone.now()
+    confidence_score = normalize_confidence(confidence_score)
+    confident = is_confident(confidence_score)
 
     attempt.attempts = (attempt.attempts or 0) + 1
     attempt.last_correct = is_correct
-    attempt.last_confidence = is_confident
+    attempt.last_confidence = confident
+    attempt.last_confidence_score = confidence_score
     attempt.last_error_reason = error_reason if not is_correct else None
     attempt.last_answered_at = now
 
@@ -37,10 +41,10 @@ def _apply_review(attempt, is_correct, is_confident, error_reason=None, now=None
     else:
         attempt.wrong_count = (attempt.wrong_count or 0) + 1
 
-    if is_correct and is_confident:
+    if is_correct and confident:
         quality = 5
         policy = 'standard'
-    elif is_correct and not is_confident:
+    elif is_correct and not confident:
         quality = 3
         policy = 'standard'
     else:
@@ -102,6 +106,7 @@ class SRSService:
     _REVIEW_FIELDS = (
         'attempts', 'wrong_count', 'ever_correct',
         'last_correct', 'last_confidence', 'last_error_reason',
+        'last_confidence_score',
         'last_answered_at',
         'ease_factor', 'interval_days', 'repetitions', 'next_due',
     )
@@ -181,7 +186,9 @@ class SRSService:
         for r in answered:
             qid = r['question_id']
             is_correct = bool(r.get('is_correct'))
-            is_confident = bool(r.get('confidence', True))
+            confidence_score = normalize_confidence(
+                r.get('confidence_score', r.get('confidence', 3)),
+            )
             error_reason = r.get('error_reason')
 
             attempt = existing.get(qid)
@@ -191,7 +198,7 @@ class SRSService:
             _apply_review(
                 attempt,
                 is_correct,
-                is_confident,
+                confidence_score,
                 error_reason=error_reason,
                 now=now,
             )

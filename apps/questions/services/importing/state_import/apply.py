@@ -51,7 +51,7 @@ mode. Both call sites now use `_create_question_from_entry`.
 
 import logging
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime
 
 from django.db import transaction
 from django.utils import timezone
@@ -61,6 +61,7 @@ from ....models import (
     Category,
     Tag,
     ClinicalCase,
+    KnowledgeObject,
     clean_tag_name,
     CASE_STEM_MAX_LENGTH,
     CASE_GROUP_MAX_LENGTH,
@@ -94,6 +95,15 @@ def _parse_optional_datetime(value):
     return parsed
 
 
+def _parse_optional_date(value):
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
 def _restore_question_timestamps(question, entry):
     """Restore source audit timestamps without triggering ``auto_now``."""
     updates = {}
@@ -112,6 +122,7 @@ def _create_question_from_entry(
     difficulty,
     category,
     case,
+    knowledge_object,
     author,
     acting_user,
     verified_at,
@@ -146,6 +157,11 @@ def _create_question_from_entry(
         ),
         difficulty=difficulty,
         category=category,
+        knowledge_object=knowledge_object,
+        last_revised_at=(
+            _parse_optional_date(entry.get('last_revised_at'))
+            or timezone.localdate()
+        ),
         case=case,
         case_order=entry.get('case_order') or None,
         is_draft=is_draft,
@@ -213,6 +229,8 @@ def _apply_state(
         'categories_updated': 0,
         'tags_created': 0,
         'cases_created': 0,
+        'knowledge_objects_created': 0,
+        'knowledge_objects_updated': 0,
         'questions_created': 0,
         'questions_updated': 0,
         'questions_skipped': 0,
@@ -367,6 +385,61 @@ def _apply_state(
                     case.save(update_fields=dirty)
             case_by_uuid[uuid_str] = case
 
+        # ── Knowledge objects ─────────────────────────────────────
+        knowledge_object_by_uuid = {}
+        for entry in payload.get('knowledge_objects') or []:
+            uuid_str = canonical_uuid(entry.get('uuid'))
+            title = (entry.get('title') or '').strip()[:200]
+            if not uuid_str or not title:
+                continue
+            existing, matched_by = _find_existing_by_uuid_or_key(
+                KnowledgeObject, uuid_str, 'title', title,
+            )
+            created_by = uuid_to_user.get(
+                canonical_uuid(entry.get('created_by_uuid')),
+            ) or acting_user
+            values = {
+                'title': title,
+                'learning_objective': (entry.get('learning_objective') or '').strip(),
+                'canonical_answer': entry.get('canonical_answer') or '',
+                'key_facts': entry.get('key_facts') or [],
+                'misconceptions': entry.get('misconceptions') or [],
+                'category': cat_by_uuid.get(
+                    canonical_uuid(entry.get('category_uuid')),
+                ),
+                'source_document': (entry.get('source_document') or '')[:500] or None,
+                'source_page': entry.get('source_page') or None,
+                'translations': entry.get('translations') or {},
+                'status': entry.get('status') or 'active',
+                'version': entry.get('version') or 1,
+                'last_revised_at': (
+                    _parse_optional_date(entry.get('last_revised_at'))
+                    or timezone.localdate()
+                ),
+                'created_by': created_by,
+            }
+            if existing is None:
+                obj = KnowledgeObject.objects.create(uuid=uuid_str, **values)
+                counts['knowledge_objects_created'] += 1
+            else:
+                obj = existing
+                for field, value in values.items():
+                    setattr(obj, field, value)
+                obj.save()
+                counts['knowledge_objects_updated'] += 1
+                if matched_by == 'key':
+                    logger.info(
+                        'Knowledge object "%s" matched by title with a '
+                        'different uuid; keeping local uuid', title,
+                    )
+            object_tags = [
+                tag_by_uuid[tag_uuid]
+                for raw_uuid in entry.get('tags') or []
+                if (tag_uuid := canonical_uuid(raw_uuid)) in tag_by_uuid
+            ]
+            obj.tags.set(object_tags)
+            knowledge_object_by_uuid[uuid_str] = obj
+
         # ── Replace mode: orphan detection and delete ─────────────
         if mode == STATE_IMPORT_MODE_REPLACE:
             envelope_uuids = {
@@ -430,6 +503,9 @@ def _apply_state(
             )
             case = case_by_uuid.get(
                 canonical_uuid(entry.get('case_uuid'))
+            )
+            knowledge_object = knowledge_object_by_uuid.get(
+                canonical_uuid(entry.get('knowledge_object_uuid'))
             )
 
             author, source = resolve_author(
@@ -503,6 +579,12 @@ def _apply_state(
                     )
                 existing_q.difficulty = difficulty
                 existing_q.category = category
+                existing_q.knowledge_object = knowledge_object
+                if 'last_revised_at' in entry:
+                    existing_q.last_revised_at = (
+                        _parse_optional_date(entry.get('last_revised_at'))
+                        or existing_q.last_revised_at
+                    )
                 existing_q.case = case
                 existing_q.case_order = entry.get('case_order') or None
                 existing_q.is_draft = is_draft
@@ -538,6 +620,7 @@ def _apply_state(
                     difficulty=difficulty,
                     category=category,
                     case=case,
+                    knowledge_object=knowledge_object,
                     author=author,
                     acting_user=acting_user,
                     verified_at=verified_at,

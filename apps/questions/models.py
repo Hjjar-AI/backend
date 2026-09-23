@@ -3,6 +3,7 @@
 import uuid
 
 from django.db import models
+from django.utils import timezone
 
 from apps.users.models import User
 from apps.core.models import TimeStampedModel
@@ -149,6 +150,77 @@ class ClinicalCase(TimeStampedModel):
         return self.title or self.key
 
 
+class KnowledgeObject(TimeStampedModel):
+    """A canonical unit of knowledge that one or more questions assess.
+
+    Categories and tags describe where content belongs.  A knowledge object
+    identifies the precise learning objective shared by alternative question
+    presentations, allowing coverage and mastery to be measured without
+    counting several rewrites of the same concept as separate knowledge.
+    """
+
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('active', 'Active'),
+        ('retired', 'Retired'),
+    ]
+
+    uuid = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+        db_index=True,
+    )
+    title = models.CharField(max_length=200, unique=True)
+    learning_objective = models.TextField(max_length=QUESTION_TEXT_MAX_LENGTH)
+    canonical_answer = models.TextField(
+        max_length=EXPLANATION_TEXT_MAX_LENGTH,
+        blank=True,
+        default='',
+    )
+    key_facts = models.JSONField(default=list, blank=True)
+    misconceptions = models.JSONField(default=list, blank=True)
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='knowledge_objects',
+    )
+    tags = models.ManyToManyField(Tag, blank=True, related_name='knowledge_objects')
+    source_document = models.CharField(
+        max_length=SOURCE_DOCUMENT_MAX_LENGTH,
+        blank=True,
+        null=True,
+    )
+    source_page = models.PositiveIntegerField(blank=True, null=True)
+    translations = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='active',
+        db_index=True,
+    )
+    version = models.PositiveIntegerField(default=1)
+    last_revised_at = models.DateField(default=timezone.localdate)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_knowledge_objects',
+    )
+
+    class Meta:
+        ordering = ['title']
+        indexes = [
+            models.Index(fields=['status', 'category'], name='ko_status_category_idx'),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
 class Question(TimeStampedModel):
     DIFFICULTY_CHOICES = [
         ('easy', 'Easy'),
@@ -199,6 +271,14 @@ class Question(TimeStampedModel):
         ),
     )
     difficulty = models.CharField(max_length=20, choices=DIFFICULTY_CHOICES, default='medium')
+    knowledge_object = models.ForeignKey(
+        KnowledgeObject,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='questions',
+        help_text='The precise learning objective assessed by this question.',
+    )
     category = models.ForeignKey(
         Category,
         on_delete=models.SET_NULL,
@@ -290,6 +370,10 @@ class Question(TimeStampedModel):
 
     # Kept for audit. Not authoritative for permission or reputation.
     updated_by = models.CharField(max_length=80, blank=True, null=True)
+    last_revised_at = models.DateField(
+        default=timezone.localdate,
+        help_text='Date on which the question content was last substantively reviewed.',
+    )
 
     times_answered = models.IntegerField(default=0)
     times_correct = models.IntegerField(default=0)

@@ -29,7 +29,8 @@ def _marker():
 
 def _marked(value, max_length):
     suffix = f' {_marker()}'
-    return f'{str(value)[:max_length - len(suffix)].rstrip()}{suffix}'
+    base = DUPLICATE_MARKER_RE.sub('', str(value)).rstrip()
+    return f'{base[:max_length - len(suffix)].rstrip()}{suffix}'
 
 
 def prepare_import_content(question_text, choices, seen_question_keys, *, check_question=True):
@@ -133,10 +134,28 @@ def build_data_quality_report():
             issues.append({'code': 'missing_source_document'})
 
         translation_issues = []
-        for locale, content in (question.translations or {}).items():
+        invalid_translation_locales = []
+        translations = question.translations or {}
+        if not isinstance(translations, dict):
+            invalid_translation_locales.append('*')
+            translations = {}
+        for locale, content in translations.items():
+            if not isinstance(content, dict) or not str(
+                content.get('question') or ''
+            ).strip():
+                invalid_translation_locales.append(str(locale))
+                continue
             translated_choices = content.get('choices') or []
+            if not isinstance(translated_choices, list):
+                invalid_translation_locales.append(str(locale))
+                continue
             if translated_choices and len(translated_choices) != len(question.choices or []):
                 translation_issues.append(locale)
+        if invalid_translation_locales:
+            issues.append({
+                'code': 'invalid_translations',
+                'locales': invalid_translation_locales,
+            })
         if translation_issues:
             issues.append({
                 'code': 'translation_choice_count_mismatch',

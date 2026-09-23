@@ -68,6 +68,15 @@ class PdfThemeTests(SimpleTestCase):
     def test_locale_and_structured_front_matter_reach_template(self):
         question = SimpleNamespace(
             difficulty='hard', category_id=None, category=None,
+            question='Base question?', choices=['A', 'B'],
+            explanation='Base explanation',
+            translations={
+                'en': {
+                    'question': 'English question?',
+                    'choices': ['Yes', 'No'],
+                    'explanation': 'English explanation',
+                },
+            },
         )
         front_matter = {
             'enabled': True,
@@ -105,6 +114,9 @@ class PdfThemeTests(SimpleTestCase):
             context['front_matter']['fields'],
             [{'label': 'Edition', 'value': '2026'}],
         )
+        self.assertEqual(question.pdf_question, 'English question?')
+        self.assertEqual(question.pdf_choices, ['Yes', 'No'])
+        self.assertEqual(question.pdf_explanation, 'English explanation')
 
     def test_question_image_is_embedded_as_a_data_uri(self):
         question = SimpleNamespace(

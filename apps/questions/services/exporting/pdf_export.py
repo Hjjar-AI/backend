@@ -524,16 +524,22 @@ def export_questions_pdf(
         q.difficulty_label = copy['difficulty'].get(
             q.difficulty, q.difficulty,
         )
-        translation = (q.translations or {}).get(locale) or {}
+        translation = (getattr(q, 'translations', None) or {}).get(locale) or {}
+        base_choices = getattr(q, 'choices', None) or []
         translated_choices = translation.get('choices') or []
-        q.pdf_question = translation.get('question') or q.question
+        q.pdf_question = (
+            translation.get('question') or getattr(q, 'question', '')
+        )
         q.pdf_choices = (
             translated_choices
-            if len(translated_choices) == len(q.choices or [])
+            if len(translated_choices) == len(base_choices)
             and all(translated_choices)
-            else q.choices
+            else base_choices
         )
-        q.pdf_explanation = translation.get('explanation') or q.explanation
+        q.pdf_explanation = (
+            translation.get('explanation')
+            or getattr(q, 'explanation', None)
+        )
         _attach_pdf_image_uri(q)
 
     font_path = resolve_arabic_font_path()

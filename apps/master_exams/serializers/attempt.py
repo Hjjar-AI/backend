@@ -10,6 +10,7 @@ reaches `MasterExamAttemptSerializer` — see the docstring on
 
 from django.conf import settings
 from rest_framework import serializers
+from apps.learning.confidence import normalize_confidence
 
 from ..models import MasterExamAttempt
 from ._constants import MAX_CHOICES
@@ -90,7 +91,7 @@ class MasterExamAttemptStatusSerializer(serializers.Serializer):
 class MasterExamSubmitAnswerSerializer(serializers.Serializer):
     question_id = serializers.IntegerField(min_value=1)
     answer = serializers.IntegerField(min_value=1, max_value=MAX_CHOICES)
-    confidence = serializers.BooleanField(required=False, default=True)
+    confidence = serializers.JSONField(required=False, default=3)
     error_reason = serializers.ChoiceField(
         choices=['unknown', 'misread', 'confused', 'guessed'],
         required=False,
@@ -98,6 +99,12 @@ class MasterExamSubmitAnswerSerializer(serializers.Serializer):
         allow_blank=True,
         default=None,
     )
+
+    def validate_confidence(self, value):
+        try:
+            return normalize_confidence(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class MasterExamGotoSerializer(serializers.Serializer):

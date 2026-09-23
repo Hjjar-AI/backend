@@ -4,6 +4,7 @@ from rest_framework import serializers
 from django.db import transaction
 
 from ..models import ExamSession, TestHistory, Blueprint, BlueprintWeight
+from apps.learning.confidence import normalize_confidence
 
 
 class ExamSessionSerializer(serializers.ModelSerializer):
@@ -45,7 +46,11 @@ class SubmitAnswerSerializer(serializers.Serializer):
     answer = serializers.IntegerField(required=False, allow_null=True, default=None)
     action = serializers.CharField(required=False, default='next')
     target_index = serializers.IntegerField(required=False, allow_null=True, default=None)
-    confidence = serializers.BooleanField(required=False, allow_null=True, default=None)
+    confidence = serializers.JSONField(required=False, allow_null=True, default=None)
+    pre_answer = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True,
+        max_length=1000, default=None,
+    )
 
     error_reason = serializers.ChoiceField(
         choices=['unknown', 'misread', 'confused', 'guessed'],
@@ -54,6 +59,14 @@ class SubmitAnswerSerializer(serializers.Serializer):
         allow_blank=True,
         default=None,
     )
+
+    def validate_confidence(self, value):
+        if value is None:
+            return None
+        try:
+            return normalize_confidence(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class BlueprintSerializer(serializers.ModelSerializer):

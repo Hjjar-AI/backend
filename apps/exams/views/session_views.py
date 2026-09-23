@@ -61,7 +61,7 @@ def _session_progress_payload(session):
         'accumulated_time': session.accumulated_time,
         'is_active': session.is_active,
     }
-    if session.mode in ('exam', 'study'):
+    if session.mode in ('exam', 'study', 'recall'):
         data['duration_minutes'] = _exam_duration_minutes()
     return data
 
@@ -210,7 +210,7 @@ class StartSessionView(APIView):
         )
 
         response_data = ExamSessionSerializer(session).data
-        if mode in ('exam', 'study'):
+        if mode in ('exam', 'study', 'recall'):
             response_data['duration_minutes'] = _exam_duration_minutes()
 
         return api_success(data=response_data, message='تم بدء الجلسة', code=200)
@@ -284,6 +284,7 @@ class SubmitAnswerView(APIView):
                 body.validated_data.get('target_index'),
                 body.validated_data.get('confidence'),
                 body.validated_data.get('error_reason'),
+                body.validated_data.get('pre_answer'),
             )
         except ValueError as e:
             return api_error(str(e), 400)
@@ -305,7 +306,7 @@ class SubmitAnswerView(APIView):
         explanation = None
         is_correct = None
         if (
-            session.mode == 'study'
+            session.mode in ('study', 'recall')
             and body.validated_data['answer'] is not None
             and submission.answered_qid is not None
         ):

@@ -68,7 +68,10 @@ def _build_export_queryset(filters, verified_only):
     """Build the same filtered, prefetched queryset for every export format."""
     queryset = (
         Question.objects
-        .select_related('case', 'category', 'authored_by', 'owned_by')
+        .select_related(
+            'case', 'category', 'authored_by', 'owned_by',
+            'knowledge_object',
+        )
         .prefetch_related('tags')
         .order_by('id')
     )
@@ -112,6 +115,16 @@ def _row_for_flat_format(q, max_choices):
         'source_document': sanitize_formula_cell(q.source_document),
         'source_page': q.source_page,
         'translations_json': json.dumps(q.translations or {}, ensure_ascii=False),
+        'knowledge_object_uuid': (
+            str(q.knowledge_object.uuid) if q.knowledge_object_id else None
+        ),
+        'knowledge_object_title': (
+            sanitize_formula_cell(q.knowledge_object.title)
+            if q.knowledge_object_id else ''
+        ),
+        'last_revised_at': (
+            q.last_revised_at.isoformat() if q.last_revised_at else None
+        ),
         # Keep the legacy comma-separated column for spreadsheet users and add
         # a lossless JSON column for names that themselves contain commas.
         'tags': sanitize_formula_cell(','.join(tag_names)),
@@ -166,6 +179,17 @@ def _row_for_json(q):
         'source_document': q.source_document,
         'source_page': q.source_page,
         'translations': q.translations or {},
+        'knowledge_object': (
+            {
+                'uuid': str(q.knowledge_object.uuid),
+                'title': q.knowledge_object.title,
+                'learning_objective': q.knowledge_object.learning_objective,
+            }
+            if q.knowledge_object_id else None
+        ),
+        'last_revised_at': (
+            q.last_revised_at.isoformat() if q.last_revised_at else None
+        ),
         # Preserve the long-standing comma-separated field for existing API
         # consumers, while ``tag_names`` provides a lossless representation
         # for names that contain commas.

@@ -57,6 +57,7 @@ class ExamSession(models.Model):
     MODE_CHOICES = [
         ('exam', 'Exam'),
         ('study', 'Study'),
+        ('recall', 'Answer before options'),
     ]
 
     session_id = models.CharField(max_length=36, unique=True)

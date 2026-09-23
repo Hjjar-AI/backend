@@ -33,6 +33,7 @@ from django.utils import timezone
 
 from apps.questions.models import Question
 from apps.questions.payloads import resolve_choice_ceiling
+from apps.learning.confidence import normalize_confidence
 
 from ...models import MasterExamAttempt
 from .helpers import _grace_seconds, _last_answer_tolerance_seconds
@@ -40,7 +41,7 @@ from .question_flow import _next_unanswered
 from .finish import _force_finish
 
 
-def submit_answer(attempt, question_id, answer, confidence=True, error_reason=None):
+def submit_answer(attempt, question_id, answer, confidence=3, error_reason=None):
     # ── Time check (outside the lock) ───────────────────────────
     #
     # The deadline does not change for the life of an attempt, so
@@ -108,7 +109,7 @@ def submit_answer(attempt, question_id, answer, confidence=True, error_reason=No
         new_answers = dict(locked.answers or {})
         new_answers[str(question_id)] = {
             'answer': answer,
-            'confidence': bool(confidence),
+            'confidence': normalize_confidence(confidence),
             'answered_at': now.isoformat(),
             'error_reason': error_reason,
         }

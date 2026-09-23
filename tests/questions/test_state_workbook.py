@@ -144,3 +144,30 @@ class StateWorkbookTests(SimpleTestCase):
 
             with self.assertRaises(StateWorkbookError):
                 read_state_workbook(path)
+
+    def test_legacy_v2_workbook_keeps_new_question_fields_absent(self):
+        """Migration can distinguish "old field absent" from "clear it"."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'legacy-state.xlsx'
+            write_state_workbook(_payload(), path)
+            workbook = load_workbook(path)
+            try:
+                metadata = workbook['Metadata']
+                for row in metadata.iter_rows(min_row=2):
+                    if row[0].value == 'state_version':
+                        row[1].value = 2
+                questions = workbook['Questions']
+                header = [cell.value for cell in questions[1]]
+                for name in ('translations_json', 'source_page', 'source_document'):
+                    questions.delete_cols(header.index(name) + 1)
+                    header.remove(name)
+                workbook.save(path)
+            finally:
+                workbook.close()
+
+            restored = read_state_workbook(path)
+
+        question = restored['questions'][0]
+        self.assertNotIn('source_document', question)
+        self.assertNotIn('source_page', question)
+        self.assertNotIn('translations', question)

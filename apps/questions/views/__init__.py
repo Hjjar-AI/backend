@@ -32,6 +32,10 @@ from .tag_admin_views import (
 from .reputation_views import (
     RefreshAuthorRanksView,
 )
+from .knowledge_object_views import (
+    KnowledgeObjectListCreateView,
+    KnowledgeObjectDetailView,
+)
 
 __all__ = [
     'QuestionListView',
@@ -57,4 +61,6 @@ __all__ = [
     'AdminTagDeleteView',
     'AdminTagMergeView',
     'RefreshAuthorRanksView',
+    'KnowledgeObjectListCreateView',
+    'KnowledgeObjectDetailView',
 ]

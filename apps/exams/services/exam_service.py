@@ -20,6 +20,7 @@ from apps.questions.payloads import (
     snapshot_image_url,
 )
 from apps.learning.srs_service import SRSService
+from apps.learning.confidence import normalize_confidence, is_confident
 from ..models import ExamSession, TestHistory, Blueprint
 
 
@@ -74,7 +75,7 @@ class ExamService:
     # The `session.answers` JSONField stores one entry per question
     # index. Two shapes exist on disk:
     #
-    #   • Modern  — {"answer": int, "confidence": bool,
+    #   • Modern  — {"answer": int, "confidence": 1|2|3,
     #                "error_reason": str | None}
     #   • Legacy  — a bare int (pre-dict-migration sessions)
     #
@@ -116,7 +117,7 @@ class ExamService:
         if isinstance(raw, dict):
             return (
                 raw.get('answer'),
-                raw.get('confidence', True),
+                normalize_confidence(raw.get('confidence', 3)),
                 raw.get('error_reason'),
             )
         return raw, None, None
@@ -130,7 +131,7 @@ class ExamService:
         """
         answer, confidence, error_reason = ExamService._read_answer_slot(raw)
         if confidence is None:
-            confidence = True
+            confidence = 3
         return answer, confidence, error_reason
 
     @staticmethod
@@ -144,6 +145,13 @@ class ExamService:
         raw = session.answers.get(str(index))
         _, confidence, _ = ExamService._read_answer_slot(raw)
         return confidence
+
+    @staticmethod
+    def _saved_pre_answer(session, index):
+        raw = session.answers.get(str(index))
+        if not isinstance(raw, dict):
+            return None
+        return raw.get('pre_answer') or None
 
     @staticmethod
     def start_session(user, mode, question_ids, tag=None, blueprint=None):
@@ -217,7 +225,7 @@ class ExamService:
             payload['verified'] = question.verified
             payload['verified_by'] = question.verified_by
 
-        if session.mode == 'study':
+        if session.mode in ('study', 'recall'):
             raw = session.answers.get(str(index))
             answer, _, _ = ExamService._read_answer_slot(raw)
             is_answered = answer is not None
@@ -227,18 +235,34 @@ class ExamService:
                 elif question is not None:
                     payload['explanation'] = question.explanation
 
+        saved_pre_answer = ExamService._saved_pre_answer(session, index)
+        if session.mode == 'recall' and not saved_pre_answer:
+            payload['choices'] = []
+            payload['choices_hidden'] = True
+            payload['translations'] = {
+                locale: {'question': content.get('question', '')}
+                for locale, content in (payload.get('translations') or {}).items()
+                if isinstance(content, dict)
+            }
+        else:
+            payload['choices_hidden'] = False
+
         return {
             'index': index,
             'total': len(session.question_ids),
             'question': payload,
             'saved_answer': ExamService._saved_answer(session, index),
             'saved_confidence': ExamService._saved_confidence(session, index),
+            'saved_pre_answer': saved_pre_answer,
             'tag': session.tag,
             'blueprint_id': session.blueprint_id,
         }
 
     @staticmethod
-    def submit_answer(session, answer, action, target_index=None, confidence=None, error_reason=None):
+    def submit_answer(
+        session, answer, action, target_index=None, confidence=None,
+        error_reason=None, pre_answer=None,
+    ):
         """
         Record one answer slot and advance the session's current index.
 
@@ -304,7 +328,20 @@ class ExamService:
                 answered_qid = locked.question_ids[idx]
                 question = Question.objects.filter(id=answered_qid).first()
 
-            if answer is not None:
+            existing_slot = locked.answers.get(str(idx))
+            existing_slot = existing_slot if isinstance(existing_slot, dict) else {}
+            clean_pre_answer = None
+            if pre_answer is not None:
+                clean_pre_answer = str(pre_answer).strip()[:1000]
+
+            if (
+                answer is not None
+                and locked.mode == 'recall'
+                and not (clean_pre_answer or existing_slot.get('pre_answer'))
+            ):
+                raise ValueError('اكتب إجابتك أولاً قبل إظهار الخيارات')
+
+            if answer is not None or clean_pre_answer:
                 if isinstance(answer, bool) or not isinstance(answer, int) or answer < 1:
                     raise ValueError('إجابة غير صالحة. يجب أن تكون رقماً موجباً')
 
@@ -335,11 +372,16 @@ class ExamService:
                 # field to be written. Do NOT drop `'answers'` from
                 # the update_fields list — JSONField mutations are
                 # invisible to Django's change detection.
-                locked.answers[str(idx)] = {
-                    'answer': answer,
-                    'confidence': True if confidence is None else bool(confidence),
-                    'error_reason': error_reason,
-                }
+                slot = dict(existing_slot)
+                if clean_pre_answer:
+                    slot['pre_answer'] = clean_pre_answer
+                if answer is not None:
+                    slot.update({
+                        'answer': answer,
+                        'confidence': normalize_confidence(confidence),
+                        'error_reason': error_reason,
+                    })
+                locked.answers[str(idx)] = slot
 
             if action == 'next':
                 locked.current_index += 1
@@ -424,7 +466,8 @@ class ExamService:
 
             present_count += 1
             raw = answers.get(str(idx))
-            user_ans, confidence, error_reason = ExamService._unpack_answer(raw)
+            user_ans, confidence_score, error_reason = ExamService._unpack_answer(raw)
+            pre_answer = raw.get('pre_answer') if isinstance(raw, dict) else None
 
             if user_ans is not None:
                 answered_count += 1
@@ -433,7 +476,7 @@ class ExamService:
 
             if is_correct:
                 correct_count += 1
-                if confidence:
+                if is_confident(confidence_score):
                     confidence_correct += 1
                 else:
                     confidence_fragile += 1
@@ -446,7 +489,9 @@ class ExamService:
                 'correct_answer': correct_answer,
                 'user_answer': user_ans,
                 'is_correct': is_correct,
-                'confidence': confidence,
+                'confidence': is_confident(confidence_score),
+                'confidence_score': confidence_score,
+                'pre_answer': pre_answer,
                 'error_reason': error_reason if not is_correct else None,
                 'explanation': merged['explanation'],
                 'category_id': merged['category_id'],

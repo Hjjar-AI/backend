@@ -26,6 +26,10 @@ class UserQuestionAttempt(models.Model):
         default=True,
         help_text='True if the user was confident in their last answer.',
     )
+    last_confidence_score = models.PositiveSmallIntegerField(
+        default=3,
+        help_text='Confidence score: 1=guessing, 2=uncertain, 3=confident.',
+    )
     last_error_reason = models.CharField(
         max_length=20,
         choices=ERROR_REASON_CHOICES,
@@ -79,6 +83,13 @@ class UserQuestionAttempt(models.Model):
             models.CheckConstraint(
                 condition=models.Q(ease_factor__gte=1.3),
                 name='uqa_ease_factor_floor',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(last_confidence_score__gte=1)
+                    & models.Q(last_confidence_score__lte=3)
+                ),
+                name='uqa_confidence_score_range',
             ),
         ]
         indexes = [

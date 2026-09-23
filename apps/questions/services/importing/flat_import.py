@@ -27,6 +27,7 @@ from ...models import (
     Category,
     Tag,
     ClinicalCase,
+    KnowledgeObject,
     clean_tag_name,
     CATEGORY_NAME_MAX_LENGTH,
     QUESTION_TEXT_MAX_LENGTH,
@@ -228,6 +229,16 @@ def _parse_optional_positive_int(value):
     return parsed
 
 
+def _parse_optional_date(value):
+    text = _cell_to_str(value).strip()
+    if not text:
+        return None
+    parsed = pd.to_datetime(text, errors='coerce')
+    if pd.isna(parsed):
+        raise ValueError('تاريخ آخر مراجعة غير صالح')
+    return parsed.date()
+
+
 def _extract_tags(row):
     """Read lossless tag arrays/JSON before the legacy comma column."""
     for key in ('tags', 'tag_names'):
@@ -263,6 +274,52 @@ def _portable_question_uuid(row):
         return uuid_module.UUID(raw)
     except (ValueError, TypeError, AttributeError):
         raise ValueError('uuid السؤال غير صالح')
+
+
+def _resolve_knowledge_object(row, author=None):
+    nested = (
+        row.get('knowledge_object')
+        if isinstance(row.get('knowledge_object'), dict) else {}
+    )
+    raw_uuid = (
+        _cell_to_str(row.get('knowledge_object_uuid')).strip()
+        or _cell_to_str(nested.get('uuid')).strip()
+    )
+    title = (
+        _cell_to_str(row.get('knowledge_object_title')).strip()
+        or _cell_to_str(nested.get('title')).strip()
+    )[:200]
+    objective = (
+        _cell_to_str(row.get('learning_objective')).strip()
+        or _cell_to_str(nested.get('learning_objective')).strip()
+        or title
+    )[:QUESTION_TEXT_MAX_LENGTH]
+    if not raw_uuid and not title:
+        return None
+
+    object_uuid = None
+    if raw_uuid:
+        try:
+            object_uuid = uuid_module.UUID(raw_uuid)
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError('uuid الهدف المعرفي غير صالح')
+        existing = KnowledgeObject.objects.filter(uuid=object_uuid).first()
+        if existing is not None:
+            return existing
+    if title:
+        existing = KnowledgeObject.objects.filter(title=title).first()
+        if existing is not None:
+            return existing
+    if not title:
+        return None
+    kwargs = {
+        'title': title,
+        'learning_objective': objective,
+        'created_by': author,
+    }
+    if object_uuid:
+        kwargs['uuid'] = object_uuid
+    return KnowledgeObject.objects.create(**kwargs)
 
 
 def _extract_translations(row):
@@ -363,6 +420,7 @@ def _build_question(row, username, author=None, owner=None):
     tags = _extract_tags(row)
 
     case = _resolve_case_from_row(row, author=author)
+    knowledge_object = _resolve_knowledge_object(row, author=author)
 
     explanation = _cell_to_str(row.get('explanation'))
     if len(explanation) > EXPLANATION_TEXT_MAX_LENGTH:
@@ -381,6 +439,7 @@ def _build_question(row, username, author=None, owner=None):
         translations=_extract_translations(row),
         difficulty=parse_difficulty(row.get('difficulty', 'medium')),
         category_id=_resolve_category(row),
+        knowledge_object=knowledge_object,
         authored_by=author,
         owned_by=owner,
         verified=False,
@@ -390,6 +449,9 @@ def _build_question(row, username, author=None, owner=None):
     portable_uuid = _portable_question_uuid(row)
     if portable_uuid is not None:
         question_kwargs['uuid'] = portable_uuid
+    revised_at = _parse_optional_date(row.get('last_revised_at'))
+    if revised_at is not None:
+        question_kwargs['last_revised_at'] = revised_at
     question = Question(**question_kwargs)
     return question, tags
 

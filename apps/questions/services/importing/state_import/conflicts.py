@@ -8,7 +8,8 @@ from .plan import canonical_uuid
 CONFLICT_FIELDS = (
     'question', 'choices', 'correct_answer', 'explanation', 'source',
     'source_document', 'source_page', 'translations', 'difficulty',
-    'category_uuid', 'tags', 'case_uuid', 'case_order', 'is_draft',
+    'category_uuid', 'knowledge_object_uuid', 'last_revised_at',
+    'tags', 'case_uuid', 'case_order', 'is_draft',
     'verified', 'verified_by', 'verified_at', 'verification_notes',
     'updated_by', 'times_answered', 'times_correct', 'version',
 )
@@ -23,6 +24,16 @@ def _local_value(question, field):
         return str(question.category.uuid) if question.category_id else None
     if field == 'case_uuid':
         return str(question.case.uuid) if question.case_id else None
+    if field == 'knowledge_object_uuid':
+        return (
+            str(question.knowledge_object.uuid)
+            if question.knowledge_object_id else None
+        )
+    if field == 'last_revised_at':
+        return (
+            question.last_revised_at.isoformat()
+            if question.last_revised_at else None
+        )
     if field == 'tags':
         return sorted(str(tag.uuid) for tag in question.tags.all())
     if field == 'verified_at':
@@ -48,7 +59,7 @@ def _incoming_value(entry, field, local_value):
     if field == 'tags':
         return sorted(canonical_uuid(item) for item in (value or []))
     if field in {
-        'category_uuid', 'case_uuid',
+        'category_uuid', 'case_uuid', 'knowledge_object_uuid',
     }:
         return canonical_uuid(value) or None
     if field in {
@@ -72,7 +83,7 @@ def analyze_conflicts(payload):
     existing = (
         Question.objects
         .filter(uuid__in=entries)
-        .select_related('category', 'case')
+        .select_related('category', 'case', 'knowledge_object')
         .prefetch_related('tags')
     )
     conflicts = []

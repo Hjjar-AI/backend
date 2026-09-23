@@ -16,6 +16,7 @@ See ImportStateView in apps/database/views.py for the full contract.
 """
 import json
 import logging
+from uuid import UUID
 
 from django.conf import settings
 from django.db import transaction
@@ -113,6 +114,14 @@ def import_state(
         for decision in (conflict_resolutions or {}).values()
     ):
         return {'error': 'قرار تعارض غير صالح', 'code': 400}
+    normalized_resolutions = {}
+    for raw_uuid, decision in (conflict_resolutions or {}).items():
+        try:
+            uuid_str = str(UUID(str(raw_uuid).strip()))
+        except (TypeError, ValueError, AttributeError):
+            return {'error': 'معرّف سؤال التعارض غير صالح', 'code': 400}
+        normalized_resolutions[uuid_str] = decision
+    conflict_resolutions = normalized_resolutions
 
     filename = str(getattr(file, 'name', '')).lower()
     if filename.endswith('.json'):

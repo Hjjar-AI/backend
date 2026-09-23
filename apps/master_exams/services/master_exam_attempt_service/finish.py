@@ -50,7 +50,7 @@ def _finish_locked(attempt, forced):
                 continue
             index_answers[str(idx)] = {
                 'answer': raw.get('answer'),
-                'confidence': raw.get('confidence', True),
+                'confidence': raw.get('confidence', 3),
                 'error_reason': raw.get('error_reason'),
             }
 

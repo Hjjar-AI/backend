@@ -29,7 +29,8 @@ _SHEET_COLUMNS = {
     'Questions': (
         'uuid', 'question', 'choices_json', 'correct_answer', 'explanation',
         'source', 'source_document', 'source_page', 'translations_json',
-        'difficulty', 'category_uuid', 'case_uuid', 'case_order',
+        'difficulty', 'knowledge_object_uuid', 'last_revised_at',
+        'category_uuid', 'case_uuid', 'case_order',
         'is_draft', 'verified', 'verified_by',
         'verified_at', 'verification_notes', 'authored_by_uuid',
         'authored_by_name', 'owned_by_uuid', 'owned_by_name', 'updated_by',
@@ -45,6 +46,12 @@ _SHEET_COLUMNS = {
         'uuid', 'key', 'title', 'stem', 'authored_by_uuid',
         'authored_by_name',
     ),
+    'KnowledgeObjects': (
+        'uuid', 'title', 'learning_objective', 'canonical_answer',
+        'key_facts_json', 'misconceptions_json', 'category_uuid',
+        'tags_json', 'source_document', 'source_page', 'translations_json',
+        'status', 'version', 'last_revised_at', 'created_by_uuid',
+    ),
     'Users': ('uuid', 'username', 'full_name'),
     'Images': (
         'question_uuid', 'filename', 'mime', 'chunk_index',
@@ -58,6 +65,7 @@ _SHEET_COLUMNS = {
 _OPTIONAL_COLUMNS = {
     'Questions': {
         'source_document', 'source_page', 'translations_json',
+        'knowledge_object_uuid', 'last_revised_at',
     },
 }
 
@@ -218,6 +226,8 @@ def write_state_workbook(payload, filepath):
             item.get('source_page'),
             json.dumps(item.get('translations') or {}, ensure_ascii=False),
             item.get('difficulty') or 'medium',
+            item.get('knowledge_object_uuid') or '',
+            item.get('last_revised_at') or '',
             item.get('category_uuid') or '',
             item.get('case_uuid') or '', item.get('case_order'),
             bool(item.get('is_draft')), bool(item.get('verified')),
@@ -259,6 +269,23 @@ def write_state_workbook(payload, filepath):
             item.get('uuid'), item.get('key'), item.get('title') or '',
             item.get('stem') or '', item.get('authored_by_uuid') or '',
             item.get('authored_by_name') or '',
+        ))
+
+    knowledge_objects = workbook.create_sheet('KnowledgeObjects')
+    _append_row(knowledge_objects, _SHEET_COLUMNS['KnowledgeObjects'])
+    for item in payload.get('knowledge_objects') or []:
+        _append_row(knowledge_objects, (
+            item.get('uuid'), item.get('title'),
+            item.get('learning_objective'), item.get('canonical_answer') or '',
+            json.dumps(item.get('key_facts') or [], ensure_ascii=False),
+            json.dumps(item.get('misconceptions') or [], ensure_ascii=False),
+            item.get('category_uuid') or '',
+            json.dumps(item.get('tags') or [], ensure_ascii=False),
+            item.get('source_document') or '', item.get('source_page'),
+            json.dumps(item.get('translations') or {}, ensure_ascii=False),
+            item.get('status') or 'active', item.get('version', 1),
+            item.get('last_revised_at') or '',
+            item.get('created_by_uuid') or '',
         ))
 
     users = workbook.create_sheet('Users')
@@ -324,6 +351,7 @@ def read_state_workbook(filepath, *, max_uncompressed_size=None):
             'categories': [],
             'tags': [],
             'cases': [],
+            'knowledge_objects': [],
             'questions': [],
         }
 
@@ -352,6 +380,36 @@ def read_state_workbook(filepath, *, max_uncompressed_size=None):
                 'authored_by_uuid': _text(row['authored_by_uuid'], nullable=True),
                 'authored_by_name': _text(row['authored_by_name'], nullable=True),
             })
+
+        if 'KnowledgeObjects' in workbook.sheetnames:
+            for row in _worksheet_rows(workbook, 'KnowledgeObjects'):
+                payload['knowledge_objects'].append({
+                    'uuid': _text(row['uuid']),
+                    'title': _text(row['title']),
+                    'learning_objective': _text(row['learning_objective']),
+                    'canonical_answer': _text(row['canonical_answer']),
+                    'key_facts': _json_list(row['key_facts_json'], 'key_facts_json'),
+                    'misconceptions': _json_list(
+                        row['misconceptions_json'], 'misconceptions_json',
+                    ),
+                    'category_uuid': _text(row['category_uuid'], nullable=True),
+                    'tags': _json_list(row['tags_json'], 'tags_json'),
+                    'source_document': _text(row['source_document'], nullable=True),
+                    'source_page': _integer(
+                        row['source_page'], 'source_page', nullable=True,
+                    ),
+                    'translations': _json_object(
+                        row['translations_json'], 'translations_json',
+                    ),
+                    'status': _text(row['status']) or 'active',
+                    'version': _integer(row['version'], 'version', default=1),
+                    'last_revised_at': _text(
+                        row['last_revised_at'], nullable=True,
+                    ),
+                    'created_by_uuid': _text(
+                        row['created_by_uuid'], nullable=True,
+                    ),
+                })
 
         for row in _worksheet_rows(workbook, 'Users'):
             user_uuid = _text(row['uuid'])
@@ -417,6 +475,14 @@ def read_state_workbook(filepath, *, max_uncompressed_size=None):
                 question['translations'] = _json_object(
                     row.get('translations_json'), 'translations_json',
                 )
+            if 'knowledge_object_uuid' in row:
+                question['knowledge_object_uuid'] = _text(
+                    row.get('knowledge_object_uuid'), nullable=True,
+                )
+            if 'last_revised_at' in row:
+                question['last_revised_at'] = _text(
+                    row.get('last_revised_at'), nullable=True,
+                )
             if question['uuid'] in question_by_uuid:
                 raise StateWorkbookError('Questions contains a duplicate uuid')
             question_by_uuid[question['uuid']] = question
@@ -465,6 +531,7 @@ def read_state_workbook(filepath, *, max_uncompressed_size=None):
             'categories': len(payload['categories']),
             'tags': len(payload['tags']),
             'cases': len(payload['cases']),
+            'knowledge_objects': len(payload['knowledge_objects']),
             'questions': len(payload['questions']),
             'users': len(payload['meta']['user_map']),
         }

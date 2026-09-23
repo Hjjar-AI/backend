@@ -10,6 +10,7 @@ from apps.core.utils import api_success, paginate, safe_int
 
 from .srs_service import SRSService
 from .services import LearningService
+from .knowledge_map import build_knowledge_map
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -59,7 +60,10 @@ def _attempt_filtered_questions(user, attempt_filter):
         Question.objects
         .visible_to(user)
         .filter(attempt_filter)
-        .select_related('category', 'authored_by', 'owned_by', 'case')
+        .select_related(
+            'category', 'authored_by', 'owned_by', 'case',
+            'knowledge_object',
+        )
         .prefetch_related('tags')
         .distinct()
         .order_by('-created_at')
@@ -157,3 +161,10 @@ class StudyNowView(APIView):
         )
         payload = LearningService.study_now_queue(request.user, limit=limit)
         return api_success(data=payload)
+
+
+class KnowledgeMapView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return api_success(data=build_knowledge_map(request.user))
