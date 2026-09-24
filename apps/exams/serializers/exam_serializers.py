@@ -13,9 +13,11 @@ class ExamSessionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'session_id', 'user', 'mode', 'question_ids', 'answers',
             'current_index', 'tag', 'started_at', 'accumulated_time',
-            'is_active', 'created_at', 'blueprint',
+            'duration_minutes', 'is_active', 'created_at', 'blueprint',
         ]
-        read_only_fields = ['id', 'user', 'created_at', 'blueprint']
+        read_only_fields = [
+            'id', 'user', 'created_at', 'blueprint', 'duration_minutes',
+        ]
 
 
 class TestHistorySerializer(serializers.ModelSerializer):

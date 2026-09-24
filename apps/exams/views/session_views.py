@@ -37,7 +37,7 @@ from ..serializers import (
     SessionIdOrModeSerializer,
     SubmitAnswerSerializer,
 )
-from ..services import ExamService, BlueprintService
+from ..services import ExamService, BlueprintService, ExamTimeExpired
 from apps.core.permissions import HasCapability
 from apps.core.utils import (
     api_success,
@@ -62,7 +62,7 @@ def _session_progress_payload(session):
         'is_active': session.is_active,
     }
     if session.mode in ('exam', 'study', 'recall'):
-        data['duration_minutes'] = _exam_duration_minutes()
+        data['duration_minutes'] = session.duration_minutes
     return data
 
 
@@ -215,14 +215,17 @@ class StartSessionView(APIView):
         # split.
         session_label = data.get('session_label') or data.get('tag') or None
 
+        duration_minutes = _exam_duration_minutes()
         session = ExamService.start_session(
-            request.user, mode, question_ids, session_label, blueprint=blueprint,
+            request.user,
+            mode,
+            question_ids,
+            session_label,
+            blueprint=blueprint,
+            duration_minutes=duration_minutes,
         )
 
         response_data = ExamSessionSerializer(session).data
-        if mode in ('exam', 'study', 'recall'):
-            response_data['duration_minutes'] = _exam_duration_minutes()
-
         return api_success(data=response_data, message='تم بدء الجلسة', code=200)
 
 
@@ -296,6 +299,8 @@ class SubmitAnswerView(APIView):
                 body.validated_data.get('error_reason'),
                 body.validated_data.get('pre_answer'),
             )
+        except ExamTimeExpired as e:
+            return api_error(str(e), 409)
         except ValueError as e:
             return api_error(str(e), 400)
 
@@ -315,12 +320,13 @@ class SubmitAnswerView(APIView):
         # than recomputed here. See the class docstring.
         explanation = None
         is_correct = None
+        feedback_translations = {}
         if (
             session.mode in ('study', 'recall')
             and body.validated_data['answer'] is not None
             and submission.answered_qid is not None
         ):
-            explanation, is_correct = ExamService.study_feedback(
+            explanation, is_correct, feedback_translations = ExamService.study_feedback(
                 session, submission.answered_qid, body.validated_data['answer'],
             )
 
@@ -328,6 +334,7 @@ class SubmitAnswerView(APIView):
             'new_index': session.current_index,
             'explanation': explanation,
             'is_correct': is_correct,
+            'feedback_translations': feedback_translations,
         })
 
 
@@ -401,7 +408,10 @@ class ResumeSessionView(APIView):
         if not session:
             return api_error('لا توجد جلسة محفوظة', 404)
 
-        session = ExamService.resume_session(session)
+        try:
+            session = ExamService.resume_session(session)
+        except ValueError as e:
+            return api_error(str(e), 409)
 
         data = _session_progress_payload(session)
         data['message'] = 'تم استئناف الجلسة'
@@ -429,8 +439,7 @@ class DiscardProgressView(APIView):
         else:
             return api_error('معرف الجلسة أو الوضع مطلوب', 400)
 
-        count = sessions.count()
-        sessions.delete()
+        count = ExamService.discard_sessions(sessions)
         return api_success(data={
             'message': 'تم حذف التقدم المحفوظ',
             'deleted_count': count,

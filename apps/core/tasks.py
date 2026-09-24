@@ -32,10 +32,16 @@ def cleanup_database():
 
     # ── Exam sessions ─────────────────────────────────────────────
     def prune_exam_sessions():
+        from apps.exams.services import ExamService
+
         cutoff = timezone.now() - timedelta(days=1)
-        ExamSession.objects.filter(is_active=False, created_at__lt=cutoff).delete()
+        ExamService.discard_sessions(
+            ExamSession.objects.filter(is_active=False, started_at__lt=cutoff),
+        )
         stale_cutoff = timezone.now() - timedelta(days=7)
-        ExamSession.objects.filter(is_active=True, started_at__lt=stale_cutoff).delete()
+        ExamService.discard_sessions(
+            ExamSession.objects.filter(is_active=True, started_at__lt=stale_cutoff),
+        )
         return 'exam sessions pruned'
 
     run_step('exam sessions', prune_exam_sessions)

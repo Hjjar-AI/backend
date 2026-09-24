@@ -11,6 +11,6 @@ def _exam_duration_minutes():
     setting = Setting.objects.filter(key='exam_duration_minutes').first()
     default = int(DEFAULT_RUNTIME_SETTINGS['exam_duration_minutes'])
     try:
-        return int(setting.value) if setting else default
+        return max(1, int(setting.value) if setting else default)
     except (TypeError, ValueError):
-        return default
+        return max(1, default)

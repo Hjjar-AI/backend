@@ -67,6 +67,10 @@ class AnswerSubmission(NamedTuple):
     answered_qid: Optional[int]
 
 
+class ExamTimeExpired(ValueError):
+    """Raised when an ordinary exam tries to mutate after its frozen limit."""
+
+
 class ExamService:
 
     # ═══════════════════════════════════════════════════════════════
@@ -150,6 +154,8 @@ class ExamService:
     @staticmethod
     def _saved_confidence(session, index):
         raw = session.answers.get(str(index))
+        if isinstance(raw, dict) and raw.get('confidence_provided') is False:
+            return None
         _, confidence, _ = ExamService._read_answer_slot(raw)
         return confidence
 
@@ -161,15 +167,25 @@ class ExamService:
         return raw.get('pre_answer') or None
 
     @staticmethod
-    def start_session(user, mode, question_ids, tag=None, blueprint=None):
+    def start_session(
+        user, mode, question_ids, tag=None, blueprint=None,
+        duration_minutes=None,
+    ):
         session_id = str(uuid.uuid4())
 
         with transaction.atomic():
-            ExamSession.objects.filter(
-                user=user,
-                mode=mode,
-                is_active=True,
-            ).delete()
+            # Serialize starts per user. Without this lock, two concurrent
+            # requests could both delete the old row and then each create a
+            # new "current" session for the same mode.
+            User.objects.select_for_update().get(pk=user.pk)
+            previous = list(
+                ExamSession.objects
+                .select_for_update()
+                .filter(user=user, mode=mode)
+            )
+            for old_session in previous:
+                ExamService._record_pending_learning_locked(old_session)
+                old_session.delete()
 
             session = ExamSession.objects.create(
                 session_id=session_id,
@@ -178,6 +194,7 @@ class ExamService:
                 question_ids=question_ids,
                 tag=tag,
                 blueprint=blueprint,
+                duration_minutes=duration_minutes,
                 # Freeze grading inputs before the session is
                 # answerable. Any concurrent edit to a Question row
                 # after this point does not affect this session.
@@ -185,6 +202,23 @@ class ExamService:
             )
 
         return session
+
+    @staticmethod
+    def elapsed_seconds(session, now=None):
+        """Return active time, including the current running segment."""
+        elapsed = max(0, int(session.accumulated_time or 0))
+        if session.is_active and session.started_at:
+            now = now or timezone.now()
+            elapsed += max(0, int((now - session.started_at).total_seconds()))
+        return elapsed
+
+    @staticmethod
+    def is_time_expired(session, now=None):
+        if session.mode != 'exam' or not session.duration_minutes:
+            return False
+        return ExamService.elapsed_seconds(session, now=now) >= (
+            int(session.duration_minutes) * 60
+        )
 
     @staticmethod
     def _snapshot_entry(session, question_id):
@@ -335,6 +369,8 @@ class ExamService:
             )
             if locked is None:
                 raise ValueError('الجلسة غير موجودة أو تم إنهاؤها مسبقاً')
+            if ExamService.is_time_expired(locked):
+                raise ExamTimeExpired('انتهى وقت الامتحان. سيتم إنهاء الجلسة الآن')
 
             idx = locked.current_index
             answered_qid = None
@@ -392,7 +428,16 @@ class ExamService:
                 if clean_pre_answer:
                     slot['pre_answer'] = clean_pre_answer
                 if answer is not None:
-                    normalized_confidence = normalize_confidence(confidence)
+                    # Missing study confidence is deliberately conservative:
+                    # it is "uncertain", never silently promoted to certain.
+                    normalized_confidence = normalize_confidence(
+                        confidence,
+                        default=2 if locked.mode in ('study', 'recall') else 3,
+                    )
+                    slot['confidence_provided'] = (
+                        slot.get('confidence_provided', False)
+                        or confidence is not None
+                    )
                     # The first submitted answer is immutable evidence for
                     # study/recall learning. The editable ``answer`` remains
                     # the user's latest choice, which preserves ordinary exam
@@ -401,10 +446,22 @@ class ExamService:
                         slot['first_answer'] = answer
                         slot['first_confidence'] = normalized_confidence
                         slot['first_error_reason'] = error_reason
+                        slot['first_answer_changed'] = False
+                    elif answer != slot.get('first_answer'):
+                        slot['first_answer_changed'] = True
                     elif (
+                        not slot.get('first_answer_changed', False)
+                        and not slot.get('learning_recorded', False)
+                    ):
+                        # Confidence is collected after the answer in the UI.
+                        # Until the learner leaves the question, a save of the
+                        # same first answer refines that one learning event.
+                        slot['first_confidence'] = normalized_confidence
+                    if (
                         error_reason is not None
                         and slot.get('first_error_reason') in (None, '')
                         and answer == slot.get('first_answer')
+                        and not slot.get('learning_recorded', False)
                     ):
                         # Reflection is collected after correctness feedback,
                         # so it legitimately arrives in a later request.
@@ -425,6 +482,9 @@ class ExamService:
             elif action == 'goto' and target_index is not None:
                 if 0 <= target_index < len(locked.question_ids):
                     locked.current_index = target_index
+
+            if locked.current_index != idx:
+                ExamService._record_pending_learning_locked(locked, indexes=[idx])
 
             locked.save(update_fields=['answers', 'current_index'])
             return AnswerSubmission(session=locked, answered_qid=answered_qid)
@@ -575,33 +635,42 @@ class ExamService:
     @staticmethod
     def study_feedback(session, question_id, answer):
         """
-        Return (explanation, is_correct) for the study-mode answer
+        Return (explanation, is_correct, translated explanations) for the
+        study-mode answer
         just submitted. Uses the session's frozen snapshot so mid-
         session edits to the question cannot flip the feedback the
         candidate sees. Falls back to the live row only when the
         snapshot has no entry (legacy sessions).
         """
         if question_id is None:
-            return None, None
+            return None, None, {}
         snap = ExamService._snapshot_entry(session, question_id)
         if snap:
             explanation = snap.get('explanation')
             correct = snap.get('correct_answer')
+            translations = snap.get('translations') or {}
         else:
             q = (
                 Question.objects
                 .filter(id=question_id)
-                .only('explanation', 'correct_answer')
+                .only('explanation', 'correct_answer', 'translations')
                 .first()
             )
             if q is None:
-                return None, None
+                return None, None, {}
             explanation = q.explanation
             correct = q.correct_answer
+            translations = q.translations or {}
+
+        feedback_translations = {
+            locale: {'explanation': content.get('explanation') or ''}
+            for locale, content in translations.items()
+            if isinstance(content, dict)
+        }
 
         if answer is None:
-            return explanation, None
-        return explanation, (answer == correct)
+            return explanation, None, feedback_translations
+        return explanation, (answer == correct), feedback_translations
 
     @staticmethod
     def update_question_stats(results):
@@ -628,6 +697,105 @@ class ExamService:
             user.record_study_day()
 
     @staticmethod
+    def _record_pending_learning_locked(session, indexes=None):
+        """Apply each study/recall first attempt exactly once.
+
+        The caller must hold a transaction/row lock when the session is
+        concurrently reachable. A marker lives in the answer slot itself,
+        making navigation retries, pause, finish, replacement, discard and
+        cleanup all idempotent without a second event table.
+        """
+        if session.mode not in ('study', 'recall'):
+            return []
+
+        allowed = set(indexes) if indexes is not None else None
+        pending = []
+        for index, question_id in enumerate(session.question_ids):
+            if allowed is not None and index not in allowed:
+                continue
+            raw = session.answers.get(str(index))
+            if raw is None:
+                continue
+            if isinstance(raw, dict):
+                slot = dict(raw)
+                answer = slot.get('first_answer', slot.get('answer'))
+            else:
+                answer = raw
+                slot = {
+                    'answer': raw,
+                    'first_answer': raw,
+                    'first_confidence': 2,
+                    'first_answer_changed': False,
+                }
+            if answer is None or slot.get('learning_recorded'):
+                continue
+            pending.append((index, question_id, slot))
+
+        if not pending:
+            return []
+
+        question_ids = [question_id for _, question_id, _ in pending]
+        answers = {
+            str(result_index): slot
+            for result_index, (_, _, slot) in enumerate(pending)
+        }
+        snapshots = {
+            str(question_id): snapshot
+            for question_id in question_ids
+            if (snapshot := ExamService._snapshot_entry(session, question_id))
+        }
+        result = ExamService.grade_exam(
+            question_ids,
+            answers,
+            question_snapshots=snapshots,
+            use_first_attempt=True,
+        )
+        ExamService.record_completion_side_effects(
+            session.user,
+            result['questions'],
+        )
+        for index, _, slot in pending:
+            slot['learning_recorded'] = True
+            session.answers[str(index)] = slot
+        return result['questions']
+
+    @staticmethod
+    def flush_session_learning(session):
+        """Public lock-safe flush used by lifecycle and cleanup paths."""
+        with transaction.atomic():
+            locked = (
+                ExamSession.objects
+                .select_for_update()
+                .select_related('user')
+                .filter(pk=session.pk)
+                .first()
+            )
+            if locked is None:
+                return 0
+            recorded = ExamService._record_pending_learning_locked(locked)
+            if recorded:
+                locked.save(update_fields=['answers'])
+            return len(recorded)
+
+    @staticmethod
+    def discard_sessions(sessions):
+        """Flush visible learning, then delete the selected live sessions."""
+        session_ids = list(sessions.values_list('pk', flat=True))
+        if not session_ids:
+            return 0
+        with transaction.atomic():
+            locked_sessions = list(
+                ExamSession.objects
+                .select_for_update()
+                .select_related('user')
+                .filter(pk__in=session_ids)
+            )
+            for session in locked_sessions:
+                ExamService._record_pending_learning_locked(session)
+            ExamSession.objects.filter(pk__in=session_ids).delete()
+        return len(locked_sessions)
+
+    @staticmethod
     def finish_session(session, user):
 
         with transaction.atomic():
@@ -644,16 +812,21 @@ class ExamService:
             if not locked.is_active:
                 raise ValueError('الجلسة غير نشطة ولا يمكن إنهاؤها مرة أخرى')
 
+            started_at = locked.started_at or timezone.now()
+            total_time = ExamService.elapsed_seconds(locked)
+            if locked.mode == 'exam' and locked.duration_minutes:
+                total_time = min(total_time, int(locked.duration_minutes) * 60)
+
             # Mark inactive BEFORE doing any write work, so a
             # re-entrant call sees the change even if the delete has
             # not yet run.
             locked.is_active = False
             locked.save(update_fields=['is_active'])
 
-            started_at = locked.started_at or timezone.now()
-            total_time = locked.accumulated_time + int(
-                (timezone.now() - started_at).total_seconds()
-            )
+            # Study/recall effects are committed incrementally. Flush the
+            # final visible question here; previously recorded slots carry an
+            # idempotency marker and are skipped.
+            ExamService._record_pending_learning_locked(locked)
 
             result = ExamService.grade_exam(
                 locked.question_ids,
@@ -662,7 +835,8 @@ class ExamService:
                 use_first_attempt=locked.mode in ('study', 'recall'),
             )
 
-            ExamService.record_completion_side_effects(user, result['questions'])
+            if locked.mode not in ('study', 'recall'):
+                ExamService.record_completion_side_effects(user, result['questions'])
             ExamService.save_history(
                 user,
                 locked.mode,
@@ -757,8 +931,15 @@ class ExamService:
                 locked.accumulated_time += int(
                     (timezone.now() - locked.started_at).total_seconds()
                 )
+            ExamService._record_pending_learning_locked(locked)
             locked.is_active = False
-            locked.save(update_fields=['accumulated_time', 'is_active'])
+            # While paused, started_at is the pause timestamp. Cleanup can
+            # therefore expire a session one day after it was paused instead
+            # of one day after it was originally created.
+            locked.started_at = timezone.now()
+            locked.save(update_fields=[
+                'answers', 'accumulated_time', 'is_active', 'started_at',
+            ])
             return locked
 
     @staticmethod
@@ -791,21 +972,29 @@ class ExamService:
         lock after the first is a no-op — it returns the
         already-active session without rewriting `started_at`.
 
-        The caller's snapshot is returned unchanged if the row is
-        gone (`finish_session` deleted it concurrently). The view
-        reads `session.session_id` on the return value; the caller's
-        object still carries it, so the response remains well-formed
-        and no write occurs.
+        If a concurrent start/finish already removed the requested row,
+        the service raises instead of returning a stale object that would
+        falsely look resumed to the client.
         """
         with transaction.atomic():
-            locked = (
+            User.objects.select_for_update().get(pk=session.user_id)
+            same_mode = list(
                 ExamSession.objects
                 .select_for_update()
-                .filter(pk=session.pk)
-                .first()
+                .select_related('user')
+                .filter(user_id=session.user_id, mode=session.mode)
             )
+            locked = next((row for row in same_mode if row.pk == session.pk), None)
             if locked is None:
-                return session
+                raise ValueError('الجلسة لم تعد متاحة للاستئناف')
+
+            # Older data may contain more than one paused row. Resuming one
+            # makes it canonical and safely retires every sibling.
+            for sibling in same_mode:
+                if sibling.pk == locked.pk:
+                    continue
+                ExamService._record_pending_learning_locked(sibling)
+                sibling.delete()
 
             if locked.is_active:
                 return locked

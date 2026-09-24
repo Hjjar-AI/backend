@@ -69,6 +69,9 @@ class ExamSession(models.Model):
     tag = models.CharField(max_length=100, blank=True, null=True)
     started_at = models.DateTimeField(default=timezone.now)
     accumulated_time = models.IntegerField(default=0)
+    # Frozen at session creation. Runtime-setting changes must not move the
+    # finish line for an exam that is already in progress.
+    duration_minutes = models.PositiveIntegerField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
     blueprint = models.ForeignKey(
