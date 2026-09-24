@@ -142,7 +142,7 @@ class MergeModeTests(CacheClearingTestCase):
         payload = _envelope([_q_entry(str(uuid_mod.uuid4()), text='Legacy v2?')])
         result = ImportService.import_state(_upload(payload), 'acting', mode='merge')
 
-        self.assertEqual(result['migrations_applied'], ['2→3'])
+        self.assertEqual(result['migrations_applied'], ['2→3', '3→4'])
         self.assertTrue(Question.objects.filter(question='Legacy v2?').exists())
 
     def test_duplicate_question_and_choices_are_marked_and_flagged(self):

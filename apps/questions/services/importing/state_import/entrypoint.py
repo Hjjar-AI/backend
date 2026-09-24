@@ -1,6 +1,6 @@
 # backend/apps/questions/services/importing/state_import/entrypoint.py
 """
-Public entry point for question-bank package imports (v2 migrates to v3).
+Public entry point for question-bank package imports (v2/v3 migrate to v4).
 
 Three-phase flow used by the frontend:
 

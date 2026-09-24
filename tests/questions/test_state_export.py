@@ -11,6 +11,7 @@ from apps.questions.services.exporting.state_export import (
     STATE_FORMAT, STATE_FORMAT_VERSION,
 )
 from apps.questions.services.state_workbook import read_state_workbook
+from apps.questions.models import KnowledgeObject
 from tests.base import CacheClearingTestCase
 from tests.factories import (
     make_user, make_question, make_category, make_tag, make_case,
@@ -95,6 +96,43 @@ class StateExportTests(CacheClearingTestCase):
         self.assertEqual(exported['source_document'], 'source.pdf')
         self.assertEqual(exported['source_page'], 17)
         self.assertEqual(exported['translations'], question.translations)
+
+    def test_linked_knowledge_object_and_revision_date_are_exported(self):
+        author = make_user('knowledge_author')
+        category = make_category('knowledge-category')
+        tag = make_tag('knowledge-tag')
+        knowledge = KnowledgeObject.objects.create(
+            title='Knowledge concept',
+            learning_objective='Explain the knowledge concept',
+            canonical_answer='Canonical answer',
+            key_facts=['Fact one'],
+            misconceptions=['Misconception one'],
+            category=category,
+            source_document='reference.pdf',
+            source_page=8,
+            created_by=author,
+        )
+        knowledge.tags.add(tag)
+        question = make_question(
+            owner=author,
+            category=category,
+            knowledge_object=knowledge,
+        )
+
+        payload = self._payload(ExportService.export_state())
+        exported_question = payload['questions'][0]
+        exported_object = payload['knowledge_objects'][0]
+
+        self.assertEqual(
+            exported_question['knowledge_object_uuid'], str(knowledge.uuid),
+        )
+        self.assertEqual(
+            exported_question['last_revised_at'],
+            question.last_revised_at.isoformat(),
+        )
+        self.assertEqual(exported_object['uuid'], str(knowledge.uuid))
+        self.assertEqual(exported_object['key_facts'], ['Fact one'])
+        self.assertEqual(exported_object['tags'], [str(tag.uuid)])
 
     def test_filters_create_a_selective_portable_package(self):
         author = make_user('selection_author')

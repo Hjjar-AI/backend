@@ -13,13 +13,14 @@ from apps.questions.services.state_workbook import (
 
 
 QUESTION_UUID = '33333333-3333-4333-8333-333333333333'
+KNOWLEDGE_UUID = '55555555-5555-4555-8555-555555555555'
 
 
 def _payload():
     return {
         'meta': {
             'format': 'mukhtabir-questions',
-            'version': 3,
+            'version': 4,
             'exported_at': '2026-01-01T00:00:00+00:00',
             'includes_images': True,
             'scope': 'selection',
@@ -45,6 +46,23 @@ def _payload():
             'parent_uuid': None,
         }],
         'cases': [],
+        'knowledge_objects': [{
+            'uuid': KNOWLEDGE_UUID,
+            'title': 'Literal concept',
+            'learning_objective': 'Explain the concept',
+            'canonical_answer': 'Canonical answer',
+            'key_facts': ['Fact one'],
+            'misconceptions': ['Common misconception'],
+            'category_uuid': '22222222-2222-4222-8222-222222222222',
+            'tags': ['44444444-4444-4444-8444-444444444444'],
+            'source_document': 'source.pdf',
+            'source_page': 12,
+            'translations': {'ar': {'title': 'مفهوم'}},
+            'status': 'active',
+            'version': 2,
+            'last_revised_at': '2026-01-02',
+            'created_by_uuid': '11111111-1111-4111-8111-111111111111',
+        }],
         'questions': [{
             'uuid': QUESTION_UUID,
             'question': '=literal question',
@@ -62,6 +80,8 @@ def _payload():
                 },
             },
             'difficulty': 'easy',
+            'knowledge_object_uuid': KNOWLEDGE_UUID,
+            'last_revised_at': '2026-01-02',
             'category_uuid': '22222222-2222-4222-8222-222222222222',
             'tags': ['44444444-4444-4444-8444-444444444444'],
             'case_uuid': None,
@@ -108,6 +128,11 @@ class StateWorkbookTests(SimpleTestCase):
         self.assertEqual(question['source_document'], 'source.pdf')
         self.assertEqual(question['source_page'], 12)
         self.assertEqual(question['translations'], _payload()['questions'][0]['translations'])
+        self.assertEqual(question['knowledge_object_uuid'], KNOWLEDGE_UUID)
+        self.assertEqual(question['last_revised_at'], '2026-01-02')
+        self.assertEqual(
+            restored['knowledge_objects'], _payload()['knowledge_objects'],
+        )
         self.assertEqual(restored['meta']['scope'], 'selection')
         self.assertEqual(restored['meta']['selection'], {'difficulty': 'easy'})
         self.assertEqual(
@@ -158,9 +183,13 @@ class StateWorkbookTests(SimpleTestCase):
                         row[1].value = 2
                 questions = workbook['Questions']
                 header = [cell.value for cell in questions[1]]
-                for name in ('translations_json', 'source_page', 'source_document'):
+                for name in (
+                    'translations_json', 'source_page', 'source_document',
+                    'knowledge_object_uuid', 'last_revised_at',
+                ):
                     questions.delete_cols(header.index(name) + 1)
                     header.remove(name)
+                del workbook['KnowledgeObjects']
                 workbook.save(path)
             finally:
                 workbook.close()
@@ -171,3 +200,6 @@ class StateWorkbookTests(SimpleTestCase):
         self.assertNotIn('source_document', question)
         self.assertNotIn('source_page', question)
         self.assertNotIn('translations', question)
+        self.assertNotIn('knowledge_object_uuid', question)
+        self.assertNotIn('last_revised_at', question)
+        self.assertEqual(restored['knowledge_objects'], [])

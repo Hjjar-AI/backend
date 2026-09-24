@@ -188,8 +188,34 @@ def _validate_state_envelope(payload):
                 return {'error': f'الهدف المعرفي رقم {idx + 1}: {field} غير صالح', 'code': 400}
         if obj.get('status', 'active') not in {'draft', 'active', 'retired'}:
             return {'error': f'الهدف المعرفي رقم {idx + 1}: status غير صالح', 'code': 400}
-        if not isinstance(obj.get('translations', {}), dict):
+        version = obj.get('version', 1)
+        if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+            return {'error': f'الهدف المعرفي رقم {idx + 1}: version غير صالح', 'code': 400}
+        source_document = obj.get('source_document') or ''
+        if not isinstance(source_document, str) or len(source_document) > SOURCE_DOCUMENT_MAX_LENGTH:
+            return {'error': f'الهدف المعرفي رقم {idx + 1}: source_document غير صالح', 'code': 400}
+        source_page = obj.get('source_page')
+        if source_page is not None and (
+            not isinstance(source_page, int)
+            or isinstance(source_page, bool)
+            or source_page < 1
+        ):
+            return {'error': f'الهدف المعرفي رقم {idx + 1}: source_page غير صالح', 'code': 400}
+        translations = obj.get('translations', {})
+        if not isinstance(translations, dict):
             return {'error': f'الهدف المعرفي رقم {idx + 1}: translations غير صالح', 'code': 400}
+        allowed_translation_fields = {
+            'title', 'learning_objective', 'canonical_answer',
+        }
+        for locale, content in translations.items():
+            if (
+                not isinstance(locale, str)
+                or not locale.strip()
+                or not isinstance(content, dict)
+                or set(content) - allowed_translation_fields
+                or any(not isinstance(value, str) for value in content.values())
+            ):
+                return {'error': f'الهدف المعرفي رقم {idx + 1}: translations غير صالح', 'code': 400}
         revised = obj.get('last_revised_at')
         if revised:
             try:

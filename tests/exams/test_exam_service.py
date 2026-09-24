@@ -61,6 +61,37 @@ class SubmitAnswerTests(CacheClearingTestCase):
         self.assertEqual(self.s.answers['0']['answer'], 1)
         self.assertEqual(self.s.current_index, 1)
 
+    def test_recall_requires_pre_answer_before_choice(self):
+        session = ExamService.start_session(
+            self.u, 'recall', [self.q.id],
+        )
+        with self.assertRaises(ValueError):
+            ExamService.submit_answer(session, 1, 'same')
+
+    def test_recall_pre_answer_reveals_choices_without_marking_answered(self):
+        session = ExamService.start_session(
+            self.u, 'recall', [self.q.id],
+        )
+        hidden = ExamService.get_question(session, 0)
+        self.assertTrue(hidden['question']['choices_hidden'])
+        self.assertEqual(hidden['question']['choices'], [])
+
+        ExamService.submit_answer(
+            session, None, 'same', pre_answer='My recalled answer',
+        )
+        session.refresh_from_db()
+        revealed = ExamService.get_question(session, 0)
+
+        self.assertFalse(revealed['question']['choices_hidden'])
+        self.assertEqual(revealed['question']['choices'], ['A', 'B', 'C'])
+        self.assertEqual(revealed['saved_pre_answer'], 'My recalled answer')
+        self.assertIsNone(revealed['saved_answer'])
+
+    def test_numeric_confidence_is_stored(self):
+        ExamService.submit_answer(self.s, 1, 'same', confidence=2)
+        self.s.refresh_from_db()
+        self.assertEqual(self.s.answers['0']['confidence'], 2)
+
 
 class FinishSessionTests(CacheClearingTestCase):
     def setUp(self):

@@ -45,6 +45,18 @@ class ApplyReviewTests(CacheClearingTestCase):
         self.assertEqual(a.interval_days, 1)
         self.assertTrue(a.ever_correct)
 
+    def test_numeric_confidence_score_is_preserved(self):
+        a = self._fresh()
+        _apply_review(a, is_correct=True, confidence_score=2)
+        self.assertEqual(a.last_confidence_score, 2)
+        self.assertFalse(a.last_confidence)
+
+    def test_guessing_score_is_preserved(self):
+        a = self._fresh()
+        _apply_review(a, is_correct=False, confidence_score=1)
+        self.assertEqual(a.last_confidence_score, 1)
+        self.assertFalse(a.last_confidence)
+
     def test_wrong_unknown_resets_to_one_day(self):
         a = self._fresh()
         a.repetitions = 5

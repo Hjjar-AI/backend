@@ -19,7 +19,7 @@ def _migrate_v2_to_v3(payload):
 def _migrate_v3_to_v4(payload):
     payload.setdefault('knowledge_objects', [])
     payload['meta']['version'] = 4
-    payload['meta']['migrated_from_version'] = 3
+    payload['meta'].setdefault('migrated_from_version', 3)
     return payload
 
 

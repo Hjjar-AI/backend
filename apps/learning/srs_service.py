@@ -7,7 +7,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from .models import UserQuestionAttempt
-from .confidence import normalize_confidence, is_confident
+from .confidence import normalize_confidence, is_confident as confidence_is_high
 from apps.questions.models import Question
 
 logger = logging.getLogger(__name__)
@@ -24,10 +24,22 @@ def _next_interval(repetitions, previous_interval, ease):
     return max(1, round(previous_interval * ease))
 
 
-def _apply_review(attempt, is_correct, confidence_score, error_reason=None, now=None):
+def _apply_review(
+    attempt,
+    is_correct,
+    confidence_score=None,
+    error_reason=None,
+    now=None,
+    is_confident=None,
+):
+    # ``is_confident`` is the pre-score keyword retained for callers and
+    # older integrations that still pass a boolean. New code should pass
+    # ``confidence_score`` (1=guessing, 2=uncertain, 3=confident).
+    if confidence_score is None and is_confident is not None:
+        confidence_score = is_confident
     now = now or timezone.now()
     confidence_score = normalize_confidence(confidence_score)
-    confident = is_confident(confidence_score)
+    confident = confidence_is_high(confidence_score)
 
     attempt.attempts = (attempt.attempts or 0) + 1
     attempt.last_correct = is_correct

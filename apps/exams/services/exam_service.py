@@ -341,7 +341,7 @@ class ExamService:
             ):
                 raise ValueError('اكتب إجابتك أولاً قبل إظهار الخيارات')
 
-            if answer is not None or clean_pre_answer:
+            if answer is not None:
                 if isinstance(answer, bool) or not isinstance(answer, int) or answer < 1:
                     raise ValueError('إجابة غير صالحة. يجب أن تكون رقماً موجباً')
 
@@ -366,7 +366,7 @@ class ExamService:
                             f'إجابة غير صالحة. يجب أن تكون بين 1 و {ceiling}'
                         )
 
-            if answer is not None:
+            if answer is not None or clean_pre_answer:
                 # NOTE: this in-place mutation only persists because
                 # `save(update_fields=['answers', ...])` forces the
                 # field to be written. Do NOT drop `'answers'` from
