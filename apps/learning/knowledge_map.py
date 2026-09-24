@@ -5,14 +5,7 @@ from collections import defaultdict
 from apps.questions.models import KnowledgeObject, Question
 
 from .models import UserQuestionAttempt
-
-
-def _attempt_mastery(attempt):
-    """Transparent 0-100 score from correctness, confidence, and retention."""
-    correctness = 1.0 if attempt.last_correct else 0.0
-    confidence = max(1, min(3, attempt.last_confidence_score or 3)) / 3.0
-    retention = min(max(attempt.repetitions or 0, 0), 3) / 3.0
-    return (correctness * 0.60 + confidence * 0.25 + retention * 0.15) * 100
+from .mastery import mastery_summary
 
 
 def build_knowledge_map(user):
@@ -60,16 +53,13 @@ def build_knowledge_map(user):
 
     items = []
     status_counts = defaultdict(int)
-    started_scores = []
+    all_scores = []
     for obj in objects:
         object_attempts = grouped.get(obj.id, [])
         attempted_questions = len(object_attempts)
         total_questions = question_counts[obj.id]
         if object_attempts:
-            mastery = round(
-                sum(_attempt_mastery(attempt) for attempt in object_attempts)
-                / attempted_questions,
-            )
+            mastery = round(mastery_summary(object_attempts, total_questions)['score'])
             average_confidence = round(
                 sum(attempt.last_confidence_score for attempt in object_attempts)
                 / attempted_questions,
@@ -84,12 +74,13 @@ def build_knowledge_map(user):
                 status = 'developing'
             else:
                 status = 'needs_work'
-            started_scores.append(mastery)
         else:
             mastery = 0
             average_confidence = None
             last_answered_at = None
             status = 'unstarted'
+
+        all_scores.append(mastery)
 
         status_counts[status] += 1
         items.append({
@@ -122,14 +113,14 @@ def build_knowledge_map(user):
     return {
         'summary': {
             'total_objects': len(items),
-            'started_objects': len(started_scores),
+            'started_objects': len(items) - status_counts['unstarted'],
             'mastered_objects': status_counts['mastered'],
             'developing_objects': status_counts['developing'],
             'needs_work_objects': status_counts['needs_work'],
             'unstarted_objects': status_counts['unstarted'],
             'average_mastery': (
-                round(sum(started_scores) / len(started_scores))
-                if started_scores else 0
+                round(sum(all_scores) / len(all_scores))
+                if all_scores else 0
             ),
         },
         'items': items,

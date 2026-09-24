@@ -34,6 +34,7 @@ class QuestionSerializer(serializers.ModelSerializer):
     tags = serializers.StringRelatedField(many=True, read_only=True)
     image_url = serializers.SerializerMethodField()
     case_sibling_count = serializers.SerializerMethodField()
+    answers_hidden = serializers.SerializerMethodField()
 
     # Authorship and ownership — the FK plus its display string.
     authored_by_username = serializers.CharField(
@@ -58,6 +59,7 @@ class QuestionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'uuid',
             'question', 'choices', 'correct_answer', 'explanation', 'source',
+            'answers_hidden',
             'source_document', 'source_page', 'translations',
             'image_url',
             'tags', 'difficulty', 'category', 'category_name', 'category_color',
@@ -88,6 +90,47 @@ class QuestionSerializer(serializers.ModelSerializer):
             return obj.image.url
         except Exception:
             return None
+
+    def _closed_book_question_ids(self):
+        request = self.context.get('request') if hasattr(self, 'context') else None
+        user = getattr(request, 'user', None) if request is not None else None
+        if user is None or not getattr(user, 'is_authenticated', False):
+            return set()
+        cache_name = '_closed_book_question_ids'
+        if hasattr(request, cache_name):
+            return getattr(request, cache_name)
+
+        # Lazy imports avoid coupling model import order to serializers.
+        from apps.exams.models import ExamSession
+        from apps.master_exams.models import MasterExamAttempt
+
+        hidden = set()
+        # Pausing must not open a lookup loophole, so all unfinished ordinary
+        # exam rows count, not only rows whose timer is currently active.
+        for question_ids in ExamSession.objects.filter(
+            user=user, mode='exam',
+        ).values_list('question_ids', flat=True):
+            hidden.update(question_ids or [])
+        for question_ids in MasterExamAttempt.objects.filter(
+            user=user, is_complete=False,
+        ).values_list('question_ids', flat=True):
+            hidden.update(question_ids or [])
+        setattr(request, cache_name, hidden)
+        return hidden
+
+    def get_answers_hidden(self, obj):
+        return obj.id in self._closed_book_question_ids()
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if data.get('answers_hidden'):
+            data['correct_answer'] = None
+            data['explanation'] = None
+            from ..payloads import without_translation_explanations
+            data['translations'] = without_translation_explanations(
+                data.get('translations'),
+            )
+        return data
 
     def get_case_sibling_count(self, obj):
         if not obj.case_id:

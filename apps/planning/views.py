@@ -69,6 +69,8 @@ class UpdatePlannerView(APIView):
 
         if not (1 <= target <= 1000):
             return api_error('الهدف اليومي يجب أن يكون بين 1 و 1000 سؤال', 400)
+        if end_date is not None and end_date < start_date:
+            return api_error('تاريخ النهاية يجب ألا يسبق تاريخ البداية', 400)
 
         category_ids = []
         if isinstance(raw_categories, list):

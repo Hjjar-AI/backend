@@ -1,12 +1,11 @@
 # backend/apps/planning/services.py
 
-from datetime import datetime
+from datetime import datetime, time, timedelta
 
-from django.db.models import Sum
 from django.utils import timezone
 
 from apps.exams.models import TestHistory
-from apps.exams.services.activity import daily_activity
+from apps.master_exams.models import MasterExamAttempt
 from apps.questions.models import Tag, clean_tag_name
 
 from .models import StudyPlanner, StudyPlannerDay
@@ -69,46 +68,62 @@ class StudyPlannerService:
 
     @staticmethod
     def record_daily_progress(user):
-        """
-        Upsert today's questions-answered count.
+        """Upsert today's answered count within the active plan scope.
 
-        ACTIVITY SOURCE (fix — issue: planner disagrees with the rest
-        of the activity system)
-        ---------------------------------------------------------
-        This method used to aggregate `TestHistory` only. The shared
-        activity calculation
-        (`apps.exams.services.activity.daily_activity`, used by the
-        heatmap, the streak history, and the group leaderboard) counts
-        BOTH `TestHistory` completions and `MasterExamAttempt`
-        completions — every completed master exam contributes its
-        `total_questions` to the day's count.
-
-        The mismatch meant a user who completed a master exam saw the
-        completion move their streak and heatmap but not their
-        planner's "questions answered today," and never reached their
-        daily target if the exam was the only activity of the day.
-
-        The planner now reads the same `daily_activity` helper the
-        rest of the system uses. The day boundary is `timezone.localdate()`
-        on both sides (the helper truncates on the same local timezone
-        the app is configured with), so the two views of "today"
-        cannot drift.
-
-        HOT PATH (unchanged)
-        --------------------
-        The fast path for a user whose planner row already exists is
-        still two queries: one activity aggregate and one UPDATE. When
-        the UPDATE affects zero rows (first study day for the account,
-        or the day row was manually removed), the fallback path sets
-        up the planner and inserts the day row.
+        Both ordinary and master exams contribute. When category/tag
+        targets exist, only answered result rows matching either target count.
         """
         today = timezone.localdate()
 
-        # The activity helper takes a first_date and returns a dict
-        # keyed on ISO date. Fetching with `first_date=today` bounds
-        # the query to the current local day on both source tables.
-        activity = daily_activity(user.id, today)
-        answered_today = activity.get(today.isoformat(), {}).get('questions', 0) or 0
+        planner, _ = StudyPlanner.objects.prefetch_related(
+            'target_categories', 'target_tags',
+        ).get_or_create(user=user)
+
+        # A dated plan does not accrue progress before it starts or after it
+        # ends. This prevents old/general activity from satisfying a new plan.
+        in_window = (
+            today >= planner.start_date
+            and (planner.end_date is None or today <= planner.end_date)
+        )
+        answered_today = 0
+        if in_window:
+            local_tz = timezone.get_current_timezone()
+            day_start = timezone.make_aware(datetime.combine(today, time.min), local_tz)
+            day_end = day_start + timedelta(days=1)
+            category_ids = set(
+                planner.target_categories.values_list('id', flat=True)
+            )
+            tag_names = set(
+                planner.target_tags.values_list('name', flat=True)
+            )
+            is_targeted = bool(category_ids or tag_names)
+
+            regular_rows = TestHistory.objects.filter(
+                user=user, completed_at__gte=day_start, completed_at__lt=day_end,
+            ).values_list('results', 'answered_count')
+            master_rows = MasterExamAttempt.objects.filter(
+                user=user, finished_at__gte=day_start, finished_at__lt=day_end,
+                is_complete=True,
+            ).values_list('results', 'answered_count')
+
+            for stored_results, answered_count in list(regular_rows) + list(master_rows):
+                if not is_targeted:
+                    answered_today += answered_count or 0
+                    continue
+                questions = (
+                    stored_results.get('questions', [])
+                    if isinstance(stored_results, dict)
+                    else stored_results or []
+                )
+                for result in questions:
+                    if result.get('user_answer') is None:
+                        continue
+                    result_tags = set(result.get('tag_names') or [])
+                    if (
+                        result.get('category_id') in category_ids
+                        or bool(result_tags & tag_names)
+                    ):
+                        answered_today += 1
 
         # Fast path: the (planner, date) row exists. A single UPDATE
         # against the indexed pair.
@@ -122,7 +137,6 @@ class StudyPlannerService:
         # row was manually removed. Set up the planner, then insert
         # the day.
         if not updated:
-            planner, _ = StudyPlanner.objects.get_or_create(user=user)
             StudyPlannerDay.objects.update_or_create(
                 planner=planner,
                 date=today,

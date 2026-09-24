@@ -114,7 +114,7 @@ def daily_activity(user_id, first_date):
         rows = (
             model.objects
             .filter(user_id=user_id, **{f'{timestamp}__gte': local_start})
-            .values_list(timestamp, 'total_questions')
+            .values_list(timestamp, 'answered_count')
         )
         for ts, questions in rows:
             # `TestHistory.completed_at` is non-nullable;
@@ -144,7 +144,7 @@ def group_activity(user_ids, cutoff):
             .filter(user_id__in=user_ids, **{f'{timestamp}__gte': cutoff})
             .values('user_id')
             .annotate(
-                questions_answered=Sum('total_questions'),
+                questions_answered=Sum('answered_count'),
                 correct=Sum('correct_count'),
                 sessions=Count('id'),
             )

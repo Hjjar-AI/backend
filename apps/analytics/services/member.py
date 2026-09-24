@@ -53,6 +53,7 @@ from django.utils import timezone
 from apps.users.models import User
 from apps.questions.models import Question, Category, Tag
 from apps.learning.models import UserQuestionAttempt
+from apps.learning.mastery import category_mastery_rows
 from apps.exams.models import TestHistory
 
 
@@ -199,7 +200,7 @@ def get_user_performance_trend(user_id, days=30):
     rows = (
         TestHistory.objects
         .filter(user_id=user_id, completed_at__gte=cutoff)
-        .values_list('completed_at', 'accuracy', 'total_questions')
+        .values_list('completed_at', 'accuracy', 'answered_count')
         .order_by('completed_at')
     )
 
@@ -210,7 +211,7 @@ def get_user_performance_trend(user_id, days=30):
     # is a plain chronological sort, and `.isoformat()` is applied
     # once when building the response.
     buckets = {}
-    for completed_at, accuracy, total_questions in rows:
+    for completed_at, accuracy, answered_count in rows:
         # `completed_at` is non-nullable on TestHistory; the guard
         # is defensive against a legacy row that somehow escaped
         # the NOT NULL constraint before it was introduced.
@@ -222,7 +223,7 @@ def get_user_performance_trend(user_id, days=30):
         )
         bucket['accuracy_sum'] += accuracy or 0.0
         bucket['count'] += 1
-        bucket['questions'] += total_questions or 0
+        bucket['questions'] += answered_count or 0
 
     return [
         {
@@ -348,29 +349,7 @@ def get_active_users_stats(days=30):
 
 
 def get_user_weak_categories(user_id, min_attempts=3, top=3):
-    rows = (
-        UserQuestionAttempt.objects
-        .filter(user_id=user_id, question__category__isnull=False)
-        .values('question__category_id', 'question__category__name')
-        .annotate(
-            attempts=Sum('attempts'),
-            wrongs=Sum('wrong_count'),
-        )
-    )
-    ranked = []
-    for r in rows:
-        att = r['attempts'] or 0
-        if att < min_attempts:
-            continue
-        wrong = r['wrongs'] or 0
-        accuracy = ((att - wrong) / att) * 100 if att else 0
-        ranked.append({
-            'category_id': r['question__category_id'],
-            'category_name': r['question__category__name'],
-            'attempts': att,
-            'wrong_count': wrong,
-            'accuracy': round(accuracy, 1),
-        })
+    ranked = category_mastery_rows(user_id, min_attempts=min_attempts)
     ranked.sort(key=lambda x: (x['accuracy'], -x['attempts']))
     return ranked[:top]
 
@@ -388,7 +367,7 @@ def get_confidence_stats(user_id):
         }
     correct_confident = qs.filter(last_correct=True, last_confidence=True).count()
     correct_fragile = qs.filter(last_correct=True, last_confidence=False).count()
-    wrong_open = qs.filter(ever_correct=False).count()
+    wrong_open = qs.filter(last_correct=False).count()
     correct_total = correct_confident + correct_fragile
     fragile_ratio = (correct_fragile / correct_total * 100) if correct_total else 0.0
     return {

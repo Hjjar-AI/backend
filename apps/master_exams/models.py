@@ -256,6 +256,7 @@ class MasterExamAttempt(TimeStampedModel):
     results = models.JSONField(null=True, blank=True)
     correct_count = models.IntegerField(default=0)
     total_questions = models.IntegerField(default=0)
+    answered_count = models.IntegerField(default=0)
     weighted_score = models.FloatField(default=0.0)
     accuracy = models.FloatField(default=0.0)
     is_complete = models.BooleanField(default=False, db_index=True)

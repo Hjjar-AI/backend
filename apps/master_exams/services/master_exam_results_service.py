@@ -65,6 +65,7 @@ class MasterExamResultsService:
                 'forced_finish': a.forced_finish,
                 'correct_count': a.correct_count,
                 'total_questions': a.total_questions,
+                'answered_count': a.answered_count,
                 'accuracy': round(a.accuracy, 2),
                 'weighted_score': round(a.weighted_score, 2),
                 'started_at': a.started_at.isoformat(),

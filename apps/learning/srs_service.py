@@ -86,19 +86,24 @@ def _apply_review(
             attempt.interval_days or 0,
             attempt.ease_factor,
         )
-    elif policy == 'misread':
-        attempt.interval_days = 2
-    elif policy == 'confused':
-        attempt.repetitions = max(0, (attempt.repetitions or 0) - 1)
-        attempt.interval_days = 3
-    elif policy == 'guessed':
+    else:
+        # Every wrong answer is a lapse, including a question answered
+        # correctly in the past. Reset the successful repetition chain and
+        # schedule a same-day relearning step; multi-day delays allowed a
+        # current misconception to disappear from review for too long.
         attempt.repetitions = 0
-        attempt.interval_days = 1
-    else:  # 'unknown'
-        attempt.repetitions = 0
-        attempt.interval_days = 1
+        attempt.interval_days = 0
 
-    attempt.next_due = now + timedelta(days=attempt.interval_days)
+    if policy == 'standard':
+        attempt.next_due = now + timedelta(days=attempt.interval_days)
+    else:
+        relearn_delay = {
+            'misread': timedelta(hours=12),
+            'confused': timedelta(hours=6),
+            'guessed': timedelta(hours=1),
+            'unknown': timedelta(minutes=10),
+        }[policy]
+        attempt.next_due = now + relearn_delay
     return attempt
 
 
@@ -271,7 +276,7 @@ class SRSService:
     def wrong_question_ids(user):
         return list(
             SRSService._visible_attempts(user)
-            .filter(ever_correct=False)
+            .filter(last_correct=False)
             .order_by('-wrong_count', '-last_answered_at')
             .values_list('question_id', flat=True)
         )
@@ -302,7 +307,7 @@ class SRSService:
             return {
                 'total_seen': total,
                 'ever_correct': qs.filter(ever_correct=True).count(),
-                'wrong_open':   qs.filter(ever_correct=False).count(),
+                'wrong_open':   qs.filter(last_correct=False).count(),
                 'fragile_correct': qs.filter(...).count(),
                 'due_now':      SRSService.due_count(user),  # <- new
                                                               #    _visible_attempts
@@ -355,7 +360,7 @@ class SRSService:
                 'id', filter=Q(ever_correct=True),
             ),
             wrong_open=Count(
-                'id', filter=Q(ever_correct=False),
+                'id', filter=Q(last_correct=False),
             ),
             fragile_correct=Count(
                 'id',

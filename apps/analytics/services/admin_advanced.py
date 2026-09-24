@@ -264,7 +264,7 @@ def get_cohort_comparison(days=30):
         .annotate(
             session_count=Count('id'),
             avg_accuracy=Avg('accuracy'),
-            total_questions=Sum('total_questions'),
+            total_questions=Sum('answered_count'),
         )
     )
 

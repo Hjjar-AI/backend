@@ -80,13 +80,14 @@ def _finish_locked(attempt, forced):
         fresh.results = result
         fresh.correct_count = result['correct_count']
         fresh.total_questions = result['total_questions']
+        fresh.answered_count = result['answered_count']
         fresh.accuracy = result['accuracy']
         fresh.weighted_score = weighted_score
         fresh.finished_at = now
         fresh.is_complete = True
         fresh.forced_finish = is_forced
         fresh.save(update_fields=[
-            'results', 'correct_count', 'total_questions',
+            'results', 'correct_count', 'total_questions', 'answered_count',
             'accuracy', 'weighted_score', 'finished_at',
             'is_complete', 'forced_finish',
         ])

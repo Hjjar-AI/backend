@@ -19,7 +19,7 @@ class ExamSessionAdmin(admin.ModelAdmin):
 @admin.register(TestHistory)
 class TestHistoryAdmin(admin.ModelAdmin):
     list_display = (
-        'user', 'mode', 'tag', 'total_questions', 'correct_count',
+        'user', 'mode', 'tag', 'total_questions', 'answered_count', 'correct_count',
         'accuracy', 'started_at', 'completed_at',
     )
     list_filter = ('mode', 'tag')
@@ -28,7 +28,7 @@ class TestHistoryAdmin(admin.ModelAdmin):
     ordering = ('-completed_at',)
     readonly_fields = (
         'user', 'mode', 'tag',
-        'total_questions', 'correct_count', 'accuracy', 'time_spent',
+        'total_questions', 'answered_count', 'correct_count', 'accuracy', 'time_spent',
         'started_at', 'completed_at',
     )
 

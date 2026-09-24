@@ -24,6 +24,9 @@ from apps.core.utils import (
     parse_csv_param,
 )
 from apps.core.throttles import BulkVerifyRateThrottle
+from apps.exams.models import Blueprint
+from apps.exams.services import BlueprintService
+from apps.learning.srs_service import SRSService
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -611,11 +614,31 @@ class AvailableCountView(APIView):
             if parsed:
                 filters['tags_filter'] = parsed
 
-        count = QuestionService.get_questions(filters, user=None).count()
-
         from django.conf import settings
+        max_questions = settings.MAX_QUIZ_QUESTIONS
+        if request.query_params.get('use_srs') == 'true':
+            due_ids = SRSService.due_question_ids(request.user)
+            count = (
+                QuestionService.get_questions(filters, user=None)
+                .filter(id__in=due_ids)
+                .count()
+            )
+        elif request.query_params.get('blueprint_id'):
+            try:
+                blueprint = Blueprint.objects.get(
+                    id=int(request.query_params['blueprint_id']),
+                    is_active=True,
+                )
+            except (Blueprint.DoesNotExist, TypeError, ValueError):
+                return api_error('نموذج الامتحان غير موجود', 404)
+            count = len(BlueprintService.select_question_ids(
+                blueprint, max_questions, filters=filters,
+            ))
+        else:
+            count = QuestionService.get_questions(filters, user=None).count()
+
         return api_success(data={
-            'count': min(count, settings.MAX_QUIZ_QUESTIONS),
+            'count': min(count, max_questions),
         })
 
 

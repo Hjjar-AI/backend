@@ -132,9 +132,13 @@ class TestHistory(models.Model):
     mode = models.CharField(max_length=20)
     tag = models.CharField(max_length=100, blank=True, null=True)
     total_questions = models.IntegerField()
+    answered_count = models.IntegerField(default=0)
     correct_count = models.IntegerField()
     accuracy = models.FloatField()
     time_spent = models.IntegerField()
+    # Frozen per-question outcomes make targeted planner progress auditable.
+    # This is intentionally not exposed by the history serializer.
+    results = models.JSONField(default=list, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(default=timezone.now)
 

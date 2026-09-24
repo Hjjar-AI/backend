@@ -2,8 +2,8 @@
 """
 Member-facing advanced analytics — features 1 and 3.
 
-  • Feature 1 — category mastery: per-category accuracy for the
-    caller, marking a category as mastered at >= 80 %.
+  • Feature 1 — conservative per-category mastery for the caller,
+    marking a category as mastered at >= 80 %.
   • Feature 3 — streak history: day-by-day study activity plus the
     caller's current and longest streaks.
 
@@ -13,47 +13,15 @@ by the view from `request.user.id`, never from a query parameter.
 
 from datetime import timedelta
 
-from django.db.models import Count, Sum
 from django.utils import timezone
 
 from apps.users.models import User
-from apps.learning.models import UserQuestionAttempt
+from apps.learning.mastery import category_mastery_rows
 from apps.exams.services.activity import daily_activity
 
 
 def get_category_mastery(user_id, min_attempts=1, top=12):
-    rows = (
-        UserQuestionAttempt.objects
-        .filter(user_id=user_id, question__category__isnull=False)
-        .values(
-            'question__category_id',
-            'question__category__name',
-            'question__category__color',
-        )
-        .annotate(
-            attempts=Sum('attempts'),
-            wrongs=Sum('wrong_count'),
-            distinct_questions=Count('question_id', distinct=True),
-        )
-    )
-
-    ranked = []
-    for r in rows:
-        att = r['attempts'] or 0
-        if att < min_attempts:
-            continue
-        wrong = r['wrongs'] or 0
-        accuracy = ((att - wrong) / att) * 100 if att else 0.0
-        ranked.append({
-            'category_id': r['question__category_id'],
-            'category_name': r['question__category__name'],
-            'category_color': r['question__category__color'] or '#667eea',
-            'attempts': att,
-            'wrong_count': wrong,
-            'distinct_questions': r['distinct_questions'] or 0,
-            'accuracy': round(accuracy, 1),
-            'mastered': accuracy >= 80.0,
-        })
+    ranked = category_mastery_rows(user_id, min_attempts=min_attempts)
 
     ranked.sort(key=lambda x: (-x['accuracy'], -x['attempts']))
     return {

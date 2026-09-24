@@ -89,7 +89,7 @@ def _serialize_question_page(page, user, request):
 
 class WrongAnswersView(APIView):
     """
-    Questions the caller has attempted and never answered correctly.
+    Questions whose caller's latest answer is wrong.
 
     PERF (fix — N+1 on the serializer relations)
     --------------------------------------------
@@ -105,7 +105,7 @@ class WrongAnswersView(APIView):
         qs = _attempt_filtered_questions(
             request.user,
             Q(user_attempts__user=request.user,
-              user_attempts__ever_correct=False),
+              user_attempts__last_correct=False),
         )
         page, meta = paginate(qs, request)
         serializer = _serialize_question_page(page, request.user, request)

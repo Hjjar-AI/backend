@@ -36,7 +36,8 @@ class MasterExamAttemptSerializer(serializers.ModelSerializer):
             'question_ids', 'answers', 'current_question_id',
             'started_at', 'deadline_at', 'finished_at',
             'duration_minutes', 'grace_seconds',
-            'correct_count', 'total_questions', 'accuracy', 'weighted_score',
+            'correct_count', 'total_questions', 'answered_count',
+            'accuracy', 'weighted_score',
         ]
         read_only_fields = fields
 

@@ -3,7 +3,11 @@
 Current-question lookup, navigation, and unanswered iteration.
 """
 from apps.questions.models import Question
-from apps.questions.payloads import exam_question_payload, snapshot_image_url
+from apps.questions.payloads import (
+    exam_question_payload,
+    snapshot_image_url,
+    without_translation_explanations,
+)
 from apps.learning.confidence import normalize_confidence
 
 
@@ -53,6 +57,9 @@ def current_question(attempt):
                 if snapshot.get('case') else None
             ),
         })
+    payload['translations'] = without_translation_explanations(
+        payload.get('translations'),
+    )
     saved = attempt.answers.get(str(question.id)) or {}
     return {
         'index': attempt_qids.index(question.id),

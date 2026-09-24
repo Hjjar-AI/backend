@@ -80,6 +80,32 @@ class StartSessionView(APIView):
         blueprint = None
         blueprint_id = data.get('blueprint_id')
 
+        # Refinements are source-independent. Previously they were parsed
+        # only in the generic-bank branch, so selecting SRS or a blueprint
+        # silently discarded difficulty, tag, and verification choices.
+        filters = {}
+        category = data.get('category')
+        category_ids = data.get('category_ids')
+        if category_ids:
+            if not isinstance(category_ids, list):
+                return api_error('معرفات التصنيفات غير صالحة', 400)
+            filters['category_ids'] = category_ids
+        elif category:
+            filters['category_ids'] = [category]
+        if data.get('difficulty'):
+            filters['difficulty'] = data['difficulty']
+        if data.get('verified_only'):
+            filters['verified'] = 'yes'
+        if data.get('use_bookmarks'):
+            filters['bookmark_user_id'] = request.user.id
+        tags_filter = data.get('tags_filter', '')
+        if tags_filter:
+            filters['tags_filter'] = (
+                [t.strip() for t in tags_filter.split(',') if t.strip()]
+                if isinstance(tags_filter, str)
+                else tags_filter
+            )
+
         if blueprint_id is not None:
             if not request.user.has_capability('tests.use_blueprint'):
                 return api_error('غير مصرح لك باستخدام نماذج الامتحان', 403)
@@ -89,7 +115,9 @@ class StartSessionView(APIView):
                 return api_error('نموذج الامتحان غير موجود', 404)
             max_quiz = getattr(settings, 'MAX_QUIZ_QUESTIONS', 200)
             count = safe_int(data.get('limit'), 50, minimum=1, maximum=max_quiz)
-            assembled = BlueprintService.select_question_ids(blueprint, count)
+            assembled = BlueprintService.select_question_ids(
+                blueprint, count, filters=filters,
+            )
             if not assembled:
                 return api_error('لا توجد أسئلة كافية مطابقة للنموذج', 404)
             question_ids = assembled
@@ -97,7 +125,13 @@ class StartSessionView(APIView):
         elif data.get('use_srs'):
             max_quiz = getattr(settings, 'MAX_QUIZ_QUESTIONS', 200)
             limit = safe_int(data.get('limit'), 20, minimum=1, maximum=max_quiz)
-            due_ids = SRSService.due_question_ids(request.user, limit=limit)
+            due_ids = SRSService.due_question_ids(request.user)
+            eligible = set(
+                QuestionService.get_questions(filters, user=None)
+                .filter(id__in=due_ids)
+                .values_list('id', flat=True)
+            )
+            due_ids = [qid for qid in due_ids if qid in eligible][:limit]
             if not due_ids:
                 return api_error('لا توجد أسئلة مستحقة للمراجعة حالياً', 404)
             question_ids = due_ids
@@ -128,10 +162,7 @@ class StartSessionView(APIView):
             question_ids = unique_ids
 
         else:
-            filters = {}
             tag = data.get('tag')
-            use_bookmarks = data.get('use_bookmarks', False)
-            verified_only = data.get('verified_only', False)
 
             # Category selection has two accepted shapes on the wire.
             #
@@ -147,32 +178,11 @@ class StartSessionView(APIView):
             #
             # Both paths normalize into `filters['category_ids']` so
             # the queryset builder only has one shape to handle.
-            category = data.get('category')                # legacy single
-            category_ids = data.get('category_ids')        # new array
-
-            difficulty = data.get('difficulty')
-            tags_filter = data.get('tags_filter', '')
             max_quiz = getattr(settings, 'MAX_QUIZ_QUESTIONS', 200)
             limit = safe_int(data.get('limit'), 200, minimum=1, maximum=max_quiz)
 
             if tag:
                 filters['tag'] = tag
-            if category_ids:
-                if not isinstance(category_ids, list):
-                    return api_error('معرفات التصنيفات غير صالحة', 400)
-                filters['category_ids'] = category_ids
-            elif category:
-                filters['category_ids'] = [category]
-            if difficulty:
-                filters['difficulty'] = difficulty
-            if verified_only:
-                filters['verified'] = 'yes'
-            if use_bookmarks:
-                filters['bookmark_user_id'] = request.user.id
-            if tags_filter:
-                filters['tags_filter'] = [
-                    t.strip() for t in tags_filter.split(',') if t.strip()
-                ]
 
             questions = QuestionService.get_questions(
                 filters, limit=limit, offset=0, user=None,

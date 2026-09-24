@@ -23,7 +23,7 @@ class MasterExamAttemptInline(admin.TabularInline):
     extra = 0
     fields = (
         'user', 'is_complete', 'is_makeup', 'forced_finish',
-        'correct_count', 'total_questions', 'accuracy', 'weighted_score',
+        'correct_count', 'answered_count', 'total_questions', 'accuracy', 'weighted_score',
         'started_at', 'finished_at',
     )
     readonly_fields = fields
@@ -93,7 +93,7 @@ class MasterExamQuestionAdmin(admin.ModelAdmin):
 class MasterExamAttemptAdmin(admin.ModelAdmin):
     list_display = (
         'user', 'master_exam', 'is_complete', 'is_makeup', 'forced_finish',
-        'correct_count', 'total_questions', 'accuracy', 'started_at',
+        'correct_count', 'answered_count', 'total_questions', 'accuracy', 'started_at',
     )
     list_filter = ('is_complete', 'is_makeup', 'forced_finish')
     search_fields = ('user__username', 'master_exam__name', 'session_id')
@@ -101,7 +101,7 @@ class MasterExamAttemptAdmin(admin.ModelAdmin):
     readonly_fields = (
         'session_id', 'master_exam', 'user', 'question_ids', 'answers',
         'current_question_id', 'started_at', 'deadline_at', 'finished_at',
-        'results', 'correct_count', 'total_questions', 'weighted_score',
+        'results', 'correct_count', 'answered_count', 'total_questions', 'weighted_score',
         'accuracy', 'is_complete', 'is_makeup', 'forced_finish',
         'exam_name_snapshot', 'created_at', 'updated_at',
     )

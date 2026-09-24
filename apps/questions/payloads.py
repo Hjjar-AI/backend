@@ -31,6 +31,18 @@ instead of two unrelated files that don't share code.
 from .models import Question
 
 
+def without_translation_explanations(translations):
+    """Copy translations while removing answer-feedback text."""
+    return {
+        locale: {
+            key: value for key, value in content.items()
+            if key != 'explanation'
+        }
+        for locale, content in (translations or {}).items()
+        if isinstance(content, dict)
+    }
+
+
 # ── Canonical case block ──────────────────────────────────────────────
 
 
@@ -122,6 +134,7 @@ def build_grading_snapshot(question_ids):
             'category_id': question.category_id,
             'category_name': question.category.name if question.category else None,
             'category_color': question.category.color if question.category else None,
+            'tag_names': [tag.name for tag in question.tags.all()],
             'question': question.question,
             'choices': question.choices,
             'explanation': question.explanation,
@@ -133,6 +146,7 @@ def build_grading_snapshot(question_ids):
             Question.objects
             .filter(id__in=question_ids)
             .select_related('category', 'case')
+            .prefetch_related('tags')
         )
     }
 

@@ -18,6 +18,7 @@ from apps.questions.payloads import (
     exam_question_payload,
     resolve_choice_ceiling,
     snapshot_image_url,
+    without_translation_explanations,
 )
 from apps.learning.srs_service import SRSService
 from apps.learning.confidence import normalize_confidence, is_confident
@@ -123,13 +124,19 @@ class ExamService:
         return raw, None, None
 
     @staticmethod
-    def _unpack_answer(raw):
+    def _unpack_answer(raw, *, use_first_attempt=False):
         """
         Grader-facing wrapper: a missing or legacy slot implies
         confidence=True (the historical default for sessions that
         predate the confidence feature).
         """
         answer, confidence, error_reason = ExamService._read_answer_slot(raw)
+        if use_first_attempt and isinstance(raw, dict) and 'first_answer' in raw:
+            answer = raw.get('first_answer')
+            confidence = normalize_confidence(
+                raw.get('first_confidence', raw.get('confidence', 3)),
+            )
+            error_reason = raw.get('first_error_reason')
         if confidence is None:
             confidence = 3
         return answer, confidence, error_reason
@@ -234,6 +241,15 @@ class ExamService:
                     payload['explanation'] = snapshot.get('explanation')
                 elif question is not None:
                     payload['explanation'] = question.explanation
+
+        may_show_feedback = (
+            session.mode in ('study', 'recall')
+            and ExamService._saved_answer(session, index) is not None
+        )
+        if not may_show_feedback:
+            payload['translations'] = without_translation_explanations(
+                payload.get('translations'),
+            )
 
         saved_pre_answer = ExamService._saved_pre_answer(session, index)
         if session.mode == 'recall' and not saved_pre_answer:
@@ -376,11 +392,30 @@ class ExamService:
                 if clean_pre_answer:
                     slot['pre_answer'] = clean_pre_answer
                 if answer is not None:
-                    slot.update({
-                        'answer': answer,
-                        'confidence': normalize_confidence(confidence),
-                        'error_reason': error_reason,
-                    })
+                    normalized_confidence = normalize_confidence(confidence)
+                    # The first submitted answer is immutable evidence for
+                    # study/recall learning. The editable ``answer`` remains
+                    # the user's latest choice, which preserves ordinary exam
+                    # review/navigation semantics.
+                    if 'first_answer' not in slot:
+                        slot['first_answer'] = answer
+                        slot['first_confidence'] = normalized_confidence
+                        slot['first_error_reason'] = error_reason
+                    elif (
+                        error_reason is not None
+                        and slot.get('first_error_reason') in (None, '')
+                        and answer == slot.get('first_answer')
+                    ):
+                        # Reflection is collected after correctness feedback,
+                        # so it legitimately arrives in a later request.
+                        slot['first_error_reason'] = error_reason
+
+                    slot['answer'] = answer
+                    slot['confidence'] = normalized_confidence
+                    # Navigation and confidence-only saves omit the reason;
+                    # omission must not erase a reflection saved earlier.
+                    if error_reason is not None:
+                        slot['error_reason'] = error_reason
                 locked.answers[str(idx)] = slot
 
             if action == 'next':
@@ -420,6 +455,7 @@ class ExamService:
                 'category_id': snapshot.get('category_id'),
                 'category_name': snapshot.get('category_name'),
                 'category_color': snapshot.get('category_color'),
+                'tag_names': snapshot.get('tag_names') or [],
                 'difficulty': snapshot.get('difficulty'),
                 'case': case_block_from_snapshot(snapshot.get('case')),
                 'image_url': snapshot_image_url(snapshot),
@@ -435,14 +471,26 @@ class ExamService:
             'category_id': question.category_id,
             'category_name': question.category.name if question.category else None,
             'category_color': question.category.color if question.category else None,
+            'tag_names': [tag.name for tag in question.tags.all()],
             'difficulty': question.difficulty,
             'case': case_block_from_live(question.case) if question.case_id else None,
             'image_url': question.image.url if question.image else None,
         }
 
     @staticmethod
-    def grade_exam(question_ids, answers, question_snapshots=None):
-        questions = Question.objects.select_related('case', 'category').in_bulk(question_ids)
+    def grade_exam(
+        question_ids, answers, question_snapshots=None,
+        *, use_first_attempt=False,
+    ):
+        questions = {
+            question.id: question
+            for question in (
+                Question.objects
+                .filter(id__in=question_ids)
+                .select_related('case', 'category')
+                .prefetch_related('tags')
+            )
+        }
         correct_count = 0
         present_count = 0
         answered_count = 0
@@ -466,7 +514,13 @@ class ExamService:
 
             present_count += 1
             raw = answers.get(str(idx))
-            user_ans, confidence_score, error_reason = ExamService._unpack_answer(raw)
+            final_answer, final_confidence, final_error_reason = (
+                ExamService._unpack_answer(raw)
+            )
+            user_ans, confidence_score, error_reason = ExamService._unpack_answer(
+                raw,
+                use_first_attempt=use_first_attempt,
+            )
             pre_answer = raw.get('pre_answer') if isinstance(raw, dict) else None
 
             if user_ans is not None:
@@ -488,6 +542,10 @@ class ExamService:
                 'image_url': merged['image_url'],
                 'correct_answer': correct_answer,
                 'user_answer': user_ans,
+                'final_answer': final_answer,
+                'final_confidence_score': final_confidence,
+                'final_error_reason': final_error_reason,
+                'used_first_attempt': bool(use_first_attempt),
                 'is_correct': is_correct,
                 'confidence': is_confident(confidence_score),
                 'confidence_score': confidence_score,
@@ -497,6 +555,7 @@ class ExamService:
                 'category_id': merged['category_id'],
                 'category_name': merged['category_name'],
                 'category_color': merged['category_color'],
+                'tag_names': merged['tag_names'],
                 'difficulty': merged['difficulty'],
                 'case': merged['case'],
             })
@@ -565,7 +624,8 @@ class ExamService:
     def record_completion_side_effects(user, results):
         ExamService.update_question_stats(results)
         SRSService.record_attempts_bulk(user, results)
-        user.record_study_day()
+        if any(r.get('user_answer') is not None for r in results):
+            user.record_study_day()
 
     @staticmethod
     def finish_session(session, user):
@@ -599,6 +659,7 @@ class ExamService:
                 locked.question_ids,
                 locked.answers,
                 question_snapshots=locked.grading_snapshot,
+                use_first_attempt=locked.mode in ('study', 'recall'),
             )
 
             ExamService.record_completion_side_effects(user, result['questions'])
@@ -607,10 +668,12 @@ class ExamService:
                 locked.mode,
                 locked.tag,
                 result['total_questions'],
+                result['answered_count'],
                 result['correct_count'],
                 result['accuracy'],
                 total_time,
                 started_at,
+                result['questions'],
             )
             # Delete inside the transaction so a mid-flight failure
             # rolls the delete back together with the results rows.
@@ -628,7 +691,10 @@ class ExamService:
         }
 
     @staticmethod
-    def save_history(user, mode, tag, total_questions, correct_count, accuracy, time_spent, started_at=None):
+    def save_history(
+        user, mode, tag, total_questions, answered_count, correct_count,
+        accuracy, time_spent, started_at=None, results=None,
+    ):
         """
         Write the history row for a finished session. This is now the
         ONLY writer of session history — `save_session_result` was
@@ -639,10 +705,12 @@ class ExamService:
             mode=mode,
             tag=tag,
             total_questions=total_questions,
+            answered_count=answered_count,
             correct_count=correct_count,
             accuracy=accuracy,
             time_spent=time_spent,
             started_at=started_at,
+            results=results or [],
         )
         return history
 
@@ -750,13 +818,16 @@ class ExamService:
 
 class BlueprintService:
     @staticmethod
-    def select_question_ids(blueprint, count):
+    def select_question_ids(blueprint, count, filters=None):
+        from math import floor
+
         from django.db.models import Count as DjCount
-        from apps.questions.models import Category
+        from apps.questions.services.question_service import QuestionService
 
         if count <= 0:
             return []
 
+        base = QuestionService.get_questions(filters, user=None)
         weights = {
             entry.category_id: entry.weight
             for entry in blueprint.weight_entries.all()
@@ -764,21 +835,13 @@ class BlueprintService:
 
         if not weights:
             return list(
-                Question.objects.public()
+                base
                 .order_by('?')
                 .values_list('id', flat=True)[:count]
             )
 
-        valid_cat_ids = set(
-            Category.objects
-            .filter(id__in=list(weights.keys()))
-            .values_list('id', flat=True)
-        )
-
         normalized = {}
         for cid, w in weights.items():
-            if cid not in valid_cat_ids:
-                continue
             try:
                 weight = float(w)
             except (ValueError, TypeError):
@@ -788,47 +851,55 @@ class BlueprintService:
 
         if not normalized:
             return list(
-                Question.objects.public()
+                base
                 .order_by('?')
                 .values_list('id', flat=True)[:count]
             )
 
         total_weight = sum(normalized.values())
         available = dict(
-            Question.objects
-            .public()
+            base.order_by()
             .filter(category_id__in=normalized.keys())
             .values_list('category_id')
             .annotate(c=DjCount('id'))
         )
 
+        # Largest-remainder allocation guarantees that quotas sum to the
+        # requested count. Independent round() calls could allocate zero
+        # questions for count=1 with two equal categories, or over-allocate
+        # in other distributions.
+        ideals = {
+            cid: count * weight / total_weight
+            for cid, weight in normalized.items()
+        }
+        quotas = {cid: floor(value) for cid, value in ideals.items()}
+        unallocated = count - sum(quotas.values())
+        for cid in sorted(
+            normalized,
+            key=lambda key: (ideals[key] - quotas[key], normalized[key]),
+            reverse=True,
+        )[:unallocated]:
+            quotas[cid] += 1
+
         selected = []
         selected_set = set()
-        shortfall = 0
-
-        for cid, w in normalized.items():
-            target = int(round(count * w / total_weight))
-            if target <= 0:
-                continue
+        for cid, target in quotas.items():
             avail = available.get(cid, 0)
             take = min(target, avail)
             if take > 0:
                 ids = list(
-                    Question.objects
-                    .public()
+                    base
                     .filter(category_id=cid)
                     .order_by('?')
                     .values_list('id', flat=True)[:take]
                 )
                 selected.extend(ids)
                 selected_set.update(ids)
-            shortfall += target - take
 
-        if shortfall > 0 and len(selected) < count:
+        if len(selected) < count:
             remaining = count - len(selected)
             extras = list(
-                Question.objects
-                .public()
+                base
                 .exclude(id__in=selected_set)
                 .order_by('?')
                 .values_list('id', flat=True)[:remaining]
