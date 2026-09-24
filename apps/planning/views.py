@@ -143,17 +143,19 @@ class ActivityHeatmapView(APIView):
             minimum=7, maximum=730,
         )
 
-        now = timezone.now()
-        cutoff = now - timedelta(days=days - 1)
+        # Build the calendar in the application's local timezone. Using
+        # `timezone.now().date()` here produced the previous UTC date for
+        # users in Asia/Damascus during the first hours after midnight,
+        # which made today's activity appear under a shifted/missing day.
+        end_date = timezone.localdate()
+        start_date = end_date - timedelta(days=days - 1)
 
         # Includes completed regular sessions and master exams.
         count_by_date = {
             date: row['questions']
-            for date, row in daily_activity(request.user.id, cutoff.date()).items()
+            for date, row in daily_activity(request.user.id, start_date).items()
         }
 
-        start_date = cutoff.date()
-        end_date = now.date()
         day_list = []
         current = start_date
         one_day = timedelta(days=1)
